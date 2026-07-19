@@ -1,0 +1,34 @@
+replicaCount: 2
+
+image:
+  repository: kafka-rest-proxy-go
+  tag: dev
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+env:
+  HTTP_ADDR: ":8080"
+  KAFKA_BROKERS: "kafka:9092"
+  KAFKA_CLIENT_ID: "kafka-rest-proxy-go"
+  KAFKA_REQUIRED_ACKS: "all"
+  KAFKA_COMPRESSION: "lz4"
+  KAFKA_LINGER: "5ms"
+  KAFKA_DELIVERY_TIMEOUT: "30s"
+  KAFKA_REQUEST_TIMEOUT: "10s"
+  KAFKA_BATCH_MAX_BYTES: "1048576"
+  KAFKA_MAX_BUFFERED_RECORDS: "100000"
+  KAFKA_MAX_BUFFERED_BYTES: "134217728"
+  REQUEST_MAX_BYTES: "8388608"
+  REQUEST_MAX_RECORDS: "1000"
+  PRODUCE_TIMEOUT: "30s"
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "2"
+    memory: "1Gi"

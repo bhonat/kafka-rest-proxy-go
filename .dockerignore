@@ -1,0 +1,8 @@
+.git
+bin
+dist
+coverage.out
+*.test
+*.prof
+*.pprof
+.DS_Store

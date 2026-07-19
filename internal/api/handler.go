@@ -1,0 +1,223 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/example/kafka-rest-proxy-go/internal/metrics"
+	"github.com/example/kafka-rest-proxy-go/internal/producer"
+)
+
+type Config struct {
+	MaxRequestBytes int64
+	MaxRecords      int
+	ProduceTimeout  time.Duration
+	BearerTokens    []string
+}
+
+type Handler struct {
+	producer Producer
+	metrics  *metrics.Metrics
+	cfg      Config
+	log      *slog.Logger
+	tokens   map[string]struct{}
+}
+
+type Producer interface {
+	Produce(ctx context.Context, records []producer.Record) ([]producer.Result, error)
+	Ping(ctx context.Context) error
+}
+
+func NewHandler(p Producer, m *metrics.Metrics, cfg Config, log *slog.Logger) *Handler {
+	if log == nil {
+		log = slog.Default()
+	}
+	h := &Handler{
+		producer: p,
+		metrics:  m,
+		cfg:      cfg,
+		log:      log,
+	}
+	if len(cfg.BearerTokens) > 0 {
+		h.tokens = make(map[string]struct{}, len(cfg.BearerTokens))
+		for _, token := range cfg.BearerTokens {
+			token = strings.TrimSpace(token)
+			if token != "" {
+				h.tokens[token] = struct{}{}
+			}
+		}
+	}
+	return h
+}
+
+func (h *Handler) Routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/topics/", h.handleTopicProduce)
+	mux.HandleFunc("/healthz", h.handleHealth)
+	mux.HandleFunc("/readyz", h.handleReady)
+	if h.metrics != nil {
+		mux.Handle("/metrics", h.metrics.Handler())
+	}
+	return h.authMiddleware(mux)
+}
+
+func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeBadRequest, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (h *Handler) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeBadRequest, "method not allowed")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if err := h.producer.Ping(ctx); err != nil {
+		writeAPIError(w, http.StatusServiceUnavailable, errorCodeProduceUnavailable, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+}
+
+func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	status := http.StatusOK
+	var bodyLen int64
+	var recordCount int
+
+	if h.metrics != nil {
+		h.metrics.IncOutstanding()
+		defer h.metrics.DecOutstanding()
+		defer func() {
+			h.metrics.ObserveRequest(status, bodyLen, recordCount, time.Since(start))
+		}()
+	}
+
+	if r.Method != http.MethodPost {
+		status = http.StatusMethodNotAllowed
+		w.Header().Set("Allow", http.MethodPost)
+		writeAPIError(w, status, errorCodeBadRequest, "method not allowed")
+		return
+	}
+
+	topic, ok := topicFromPath(r.URL)
+	if !ok {
+		status = http.StatusNotFound
+		writeAPIError(w, status, errorCodeBadRequest, "not found")
+		return
+	}
+
+	if !acceptsResponse(r) {
+		status = http.StatusNotAcceptable
+		writeAPIError(w, status, errorCodeNotAcceptable, "unsupported Accept header")
+		return
+	}
+
+	format, ok := parseContentType(r.Header.Get("Content-Type"))
+	if !ok {
+		status = http.StatusUnsupportedMediaType
+		writeAPIError(w, status, errorCodeUnsupportedMedia, "unsupported Content-Type")
+		return
+	}
+
+	bodyReader := http.MaxBytesReader(w, r.Body, h.cfg.MaxRequestBytes)
+	body, err := io.ReadAll(bodyReader)
+	bodyLen = int64(len(body))
+	if err != nil {
+		status = http.StatusRequestEntityTooLarge
+		writeAPIError(w, status, errorCodeUnprocessable, "request body exceeds configured size limit")
+		return
+	}
+
+	records, err := decodeProduceRequest(topic, body, format, h.cfg.MaxRecords)
+	if err != nil {
+		status = http.StatusUnprocessableEntity
+		var ve validationError
+		if errors.As(err, &ve) {
+			writeAPIError(w, status, errorCodeUnprocessable, ve.Error())
+			return
+		}
+		writeAPIError(w, status, errorCodeUnprocessable, err.Error())
+		return
+	}
+	recordCount = len(records)
+
+	ctx, cancel := context.WithTimeout(r.Context(), h.cfg.ProduceTimeout)
+	defer cancel()
+
+	results, err := h.producer.Produce(ctx, records)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			err = contextCanceled
+		}
+		status, code, msg := classifyProduceError(err)
+		writeAPIError(w, status, code, msg)
+		return
+	}
+
+	if h.metrics != nil {
+		successes, failures := countResultStatus(results)
+		h.metrics.ObserveProduceResult(successes, failures)
+	}
+
+	w.Header().Set("Content-Type", mediaKafkaV2)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(responseFromResults(results))
+}
+
+func topicFromPath(u *url.URL) (string, bool) {
+	const prefix = "/topics/"
+	path := u.EscapedPath()
+	if !strings.HasPrefix(path, prefix) || len(path) == len(prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	if strings.Contains(rest, "/") {
+		return "", false
+	}
+	topic, err := url.PathUnescape(rest)
+	if err != nil || topic == "" {
+		return "", false
+	}
+	return topic, true
+}
+
+func (h *Handler) authMiddleware(next http.Handler) http.Handler {
+	if len(h.tokens) == 0 {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		const prefix = "Bearer "
+		if !strings.HasPrefix(auth, prefix) {
+			writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "missing bearer token")
+			return
+		}
+		token := strings.TrimSpace(strings.TrimPrefix(auth, prefix))
+		if _, ok := h.tokens[token]; !ok {
+			writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "invalid bearer token")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

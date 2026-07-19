@@ -1,0 +1,188 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type Config struct {
+	HTTPAddr          string
+	ReadHeaderTimeout time.Duration
+	ShutdownTimeout   time.Duration
+	ProduceTimeout    time.Duration
+	RequestMaxBytes   int64
+	RequestMaxRecords int
+	AuthBearerTokens  []string
+	Kafka             KafkaConfig
+}
+
+type KafkaConfig struct {
+	Brokers            []string
+	ClientID           string
+	RequiredAcks       string
+	Compression        string
+	Linger             time.Duration
+	DeliveryTimeout    time.Duration
+	RequestTimeout     time.Duration
+	BatchMaxBytes      int32
+	MaxBufferedRecords int
+	MaxBufferedBytes   int
+	TLS                TLSConfig
+	SASL               SASLConfig
+}
+
+type TLSConfig struct {
+	Enable             bool
+	InsecureSkipVerify bool
+}
+
+type SASLConfig struct {
+	Mechanism string
+	Username  string
+	Password  string
+}
+
+func LoadFromEnv() (Config, error) {
+	cfg := Config{
+		HTTPAddr:          envString("HTTP_ADDR", ":8080"),
+		ReadHeaderTimeout: envDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		ShutdownTimeout:   envDuration("SHUTDOWN_TIMEOUT", 20*time.Second),
+		ProduceTimeout:    envDuration("PRODUCE_TIMEOUT", 30*time.Second),
+		RequestMaxBytes:   envInt64("REQUEST_MAX_BYTES", 8*1024*1024),
+		RequestMaxRecords: envInt("REQUEST_MAX_RECORDS", 1000),
+		AuthBearerTokens:  envCSV("AUTH_BEARER_TOKENS"),
+		Kafka: KafkaConfig{
+			Brokers:            envCSVDefault("KAFKA_BROKERS", []string{"localhost:9092"}),
+			ClientID:           envString("KAFKA_CLIENT_ID", "kafka-rest-proxy-go"),
+			RequiredAcks:       envString("KAFKA_REQUIRED_ACKS", "all"),
+			Compression:        envString("KAFKA_COMPRESSION", "lz4"),
+			Linger:             envDuration("KAFKA_LINGER", 5*time.Millisecond),
+			DeliveryTimeout:    envDuration("KAFKA_DELIVERY_TIMEOUT", 30*time.Second),
+			RequestTimeout:     envDuration("KAFKA_REQUEST_TIMEOUT", 10*time.Second),
+			BatchMaxBytes:      int32(envInt("KAFKA_BATCH_MAX_BYTES", 1_048_576)),
+			MaxBufferedRecords: envInt("KAFKA_MAX_BUFFERED_RECORDS", 100_000),
+			MaxBufferedBytes:   envInt("KAFKA_MAX_BUFFERED_BYTES", 128*1024*1024),
+			TLS: TLSConfig{
+				Enable:             envBool("KAFKA_TLS_ENABLE", false),
+				InsecureSkipVerify: envBool("KAFKA_TLS_INSECURE_SKIP_VERIFY", false),
+			},
+			SASL: SASLConfig{
+				Mechanism: envString("KAFKA_SASL_MECHANISM", ""),
+				Username:  envString("KAFKA_SASL_USERNAME", ""),
+				Password:  envString("KAFKA_SASL_PASSWORD", ""),
+			},
+		},
+	}
+
+	if len(cfg.Kafka.Brokers) == 0 {
+		return Config{}, fmt.Errorf("KAFKA_BROKERS must include at least one broker")
+	}
+	if cfg.RequestMaxRecords <= 0 {
+		return Config{}, fmt.Errorf("REQUEST_MAX_RECORDS must be positive")
+	}
+	if cfg.RequestMaxBytes <= 0 {
+		return Config{}, fmt.Errorf("REQUEST_MAX_BYTES must be positive")
+	}
+	if cfg.Kafka.MaxBufferedRecords <= 0 {
+		return Config{}, fmt.Errorf("KAFKA_MAX_BUFFERED_RECORDS must be positive")
+	}
+	if cfg.Kafka.MaxBufferedBytes <= 0 {
+		return Config{}, fmt.Errorf("KAFKA_MAX_BUFFERED_BYTES must be positive")
+	}
+	if cfg.Kafka.SASL.Mechanism != "" && (cfg.Kafka.SASL.Username == "" || cfg.Kafka.SASL.Password == "") {
+		return Config{}, fmt.Errorf("KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD are required when KAFKA_SASL_MECHANISM is set")
+	}
+
+	return cfg, nil
+}
+
+func envString(name, def string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return v
+	}
+	return def
+}
+
+func envCSV(name string) []string {
+	return cleanCSV(os.Getenv(name))
+}
+
+func envCSVDefault(name string, def []string) []string {
+	if v := cleanCSV(os.Getenv(name)); len(v) > 0 {
+		return v
+	}
+	return def
+}
+
+func cleanCSV(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := parts[:0]
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func envBool(name string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return def
+	}
+}
+
+func envInt(name string, def int) int {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func envInt64(name string, def int64) int64 {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func envDuration(name string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err == nil {
+		return d
+	}
+	ms, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return time.Duration(ms) * time.Millisecond
+}

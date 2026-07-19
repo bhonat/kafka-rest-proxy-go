@@ -1,0 +1,123 @@
+name: kafka-rest-proxy-go-cluster
+
+x-kafka-common: &kafka-common
+  image: confluentinc/cp-kafka:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+  environment: &kafka-common-env
+    CLUSTER_ID: ${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}
+    KAFKA_PROCESS_ROLES: broker,controller
+    KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+    KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+    KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    KAFKA_NUM_PARTITIONS: 12
+
+services:
+  kafka-1:
+    <<: *kafka-common
+    hostname: kafka-1
+    container_name: kafka-rest-proxy-go-kafka-1
+    ports:
+      - "19092:19092"
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:19092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-1:9092,HOST://localhost:19092
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+
+  kafka-2:
+    <<: *kafka-common
+    hostname: kafka-2
+    container_name: kafka-rest-proxy-go-kafka-2
+    ports:
+      - "29092:29092"
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-2:9092,HOST://localhost:29092
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+
+  kafka-3:
+    <<: *kafka-common
+    hostname: kafka-3
+    container_name: kafka-rest-proxy-go-kafka-3
+    ports:
+      - "39092:39092"
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:39092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka-3:9092,HOST://localhost:39092
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+
+  init-topics:
+    image: confluentinc/cp-kafka:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+    depends_on:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
+        condition: service_healthy
+    command:
+      - bash
+      - -lc
+      - |
+        kafka-topics --bootstrap-server kafka-1:9092 --create --if-not-exists --topic orders --partitions 12 --replication-factor 3
+        kafka-topics --bootstrap-server kafka-1:9092 --create --if-not-exists --topic binary-events --partitions 12 --replication-factor 3
+
+  kafka-rest-proxy-go:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kafka-rest-proxy-go:dev
+    container_name: kafka-rest-proxy-go-cluster
+    depends_on:
+      init-topics:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    environment:
+      HTTP_ADDR: ":8080"
+      KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      KAFKA_CLIENT_ID: kafka-rest-proxy-go-cluster
+      KAFKA_REQUIRED_ACKS: all
+      KAFKA_COMPRESSION: lz4
+      KAFKA_LINGER: 5ms
+      KAFKA_DELIVERY_TIMEOUT: 30s
+      KAFKA_REQUEST_TIMEOUT: 10s
+      KAFKA_BATCH_MAX_BYTES: 1048576
+      KAFKA_MAX_BUFFERED_RECORDS: 100000
+      KAFKA_MAX_BUFFERED_BYTES: 134217728
+      REQUEST_MAX_BYTES: 8388608
+      REQUEST_MAX_RECORDS: 1000
+      PRODUCE_TIMEOUT: 30s
+
+volumes:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:
