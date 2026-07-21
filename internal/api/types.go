@@ -49,9 +49,9 @@ type produceResponse struct {
 }
 
 type produceOffset struct {
-	Partition int32   `json:"partition"`
-	Offset    int64   `json:"offset"`
-	ErrorCode *int16  `json:"error_code"`
+	Partition *int32  `json:"partition"`
+	Offset    *int64  `json:"offset"`
+	ErrorCode *int    `json:"error_code"`
 	Error     *string `json:"error"`
 }
 
@@ -192,16 +192,27 @@ func isJSONNull(raw json.RawMessage) bool {
 func responseFromResults(results []producer.Result) produceResponse {
 	resp := produceResponse{Offsets: make([]produceOffset, len(results))}
 	for i, r := range results {
-		var errText *string
-		if r.Err != nil {
-			s := r.Err.Error()
-			errText = &s
+		if resultFailed(r) {
+			code := confluentKafkaRecordErrorCode
+			if r.ErrorCode != nil {
+				code = *r.ErrorCode
+			}
+			errText := "Kafka produce failed"
+			if r.Err != nil {
+				errText = r.Err.Error()
+			}
+			resp.Offsets[i] = produceOffset{
+				ErrorCode: &code,
+				Error:     &errText,
+			}
+			continue
 		}
+
+		partition := r.Partition
+		offset := r.Offset
 		resp.Offsets[i] = produceOffset{
-			Partition: r.Partition,
-			Offset:    r.Offset,
-			ErrorCode: r.ErrorCode,
-			Error:     errText,
+			Partition: &partition,
+			Offset:    &offset,
 		}
 	}
 	return resp
@@ -209,7 +220,7 @@ func responseFromResults(results []producer.Result) produceResponse {
 
 func countResultStatus(results []producer.Result) (successes, failures int) {
 	for _, r := range results {
-		if r.Err != nil || r.ErrorCode != nil {
+		if resultFailed(r) {
 			failures++
 		} else {
 			successes++
@@ -217,3 +228,9 @@ func countResultStatus(results []producer.Result) (successes, failures int) {
 	}
 	return successes, failures
 }
+
+func resultFailed(r producer.Result) bool {
+	return r.Err != nil || r.ErrorCode != nil
+}
+
+const confluentKafkaRecordErrorCode = 50002

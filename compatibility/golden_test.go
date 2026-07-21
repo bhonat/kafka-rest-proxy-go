@@ -34,7 +34,7 @@ type fixtureRequest struct {
 type fixtureProducerResult struct {
 	Partition int32  `json:"partition"`
 	Offset    int64  `json:"offset"`
-	ErrorCode *int16 `json:"error_code"`
+	ErrorCode *int   `json:"error_code"`
 	Error     string `json:"error"`
 }
 

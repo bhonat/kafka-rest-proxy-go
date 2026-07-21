@@ -66,6 +66,32 @@ For binary media types, `key` and `value` must be base64 strings or `null`.
 
 The response order is aligned with the input `records[]` order.
 
+Kafka-side record failures are returned in the same `offsets[]` array with HTTP
+`200`, matching captured Confluent REST Proxy behavior. Failed records use
+`null` for `partition` and `offset`:
+
+```json
+{
+  "offsets": [
+    {
+      "partition": 2,
+      "offset": 91823,
+      "error_code": null,
+      "error": null
+    },
+    {
+      "partition": null,
+      "offset": null,
+      "error_code": 50002,
+      "error": "Invalid topics: [bad topic]"
+    }
+  ]
+}
+```
+
+The MVP maps Kafka/client callback-level record failures to Confluent's producer
+record error code `50002`.
+
 ## Known MVP gaps
 
 The MVP is intentionally close rather than exact:

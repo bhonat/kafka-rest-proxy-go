@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,8 +76,91 @@ func TestJSONProduce(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Offsets) != 1 || resp.Offsets[0].Offset != 100 {
+	if len(resp.Offsets) != 1 || resp.Offsets[0].Offset == nil || *resp.Offsets[0].Offset != 100 {
 		t.Fatalf("unexpected response: %#v", resp)
+	}
+}
+
+func TestKafkaRecordErrorsReturnHTTP200WithPerRecordErrors(t *testing.T) {
+	code := 50002
+	fp := &fakeProducer{
+		results: []producer.Result{
+			{Partition: 2, Offset: 100},
+			{ErrorCode: &code, Err: errors.New("Invalid topics: [bad topic]")},
+		},
+	}
+	h := NewHandler(fp, nil, Config{
+		MaxRequestBytes: 1024 * 1024,
+		MaxRecords:      10,
+		ProduceTimeout:  time.Second,
+	}, nil)
+
+	body := `{"records":[{"value":{"ok":true}},{"value":{"ok":false}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/topics/orders", strings.NewReader(body))
+	req.Header.Set("Content-Type", mediaKafkaJSONV2)
+	req.Header.Set("Accept", mediaKafkaV2)
+	rec := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp produceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Offsets) != 2 {
+		t.Fatalf("offsets = %d, want 2", len(resp.Offsets))
+	}
+	if resp.Offsets[0].Partition == nil || *resp.Offsets[0].Partition != 2 {
+		t.Fatalf("success partition = %#v", resp.Offsets[0].Partition)
+	}
+	if resp.Offsets[0].Offset == nil || *resp.Offsets[0].Offset != 100 {
+		t.Fatalf("success offset = %#v", resp.Offsets[0].Offset)
+	}
+	if resp.Offsets[0].ErrorCode != nil || resp.Offsets[0].Error != nil {
+		t.Fatalf("success should not include error: %#v", resp.Offsets[0])
+	}
+	if resp.Offsets[1].Partition != nil || resp.Offsets[1].Offset != nil {
+		t.Fatalf("failed record should have null partition/offset: %#v", resp.Offsets[1])
+	}
+	if resp.Offsets[1].ErrorCode == nil || *resp.Offsets[1].ErrorCode != 50002 {
+		t.Fatalf("error_code = %#v, want 50002", resp.Offsets[1].ErrorCode)
+	}
+	if resp.Offsets[1].Error == nil || *resp.Offsets[1].Error != "Invalid topics: [bad topic]" {
+		t.Fatalf("error = %#v", resp.Offsets[1].Error)
+	}
+}
+
+func TestKafkaRecordErrorDefaultsToConfluentCode(t *testing.T) {
+	fp := &fakeProducer{
+		results: []producer.Result{
+			{Err: errors.New("The message is larger than max.request.size")},
+		},
+	}
+	h := NewHandler(fp, nil, Config{
+		MaxRequestBytes: 1024 * 1024,
+		MaxRecords:      10,
+		ProduceTimeout:  time.Second,
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/topics/orders", strings.NewReader(`{"records":[{"value":{"ok":true}}]}`))
+	req.Header.Set("Content-Type", mediaKafkaJSONV2)
+	rec := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp produceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Offsets[0].ErrorCode == nil || *resp.Offsets[0].ErrorCode != 50002 {
+		t.Fatalf("error_code = %#v, want 50002", resp.Offsets[0].ErrorCode)
 	}
 }
 

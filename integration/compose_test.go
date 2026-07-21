@@ -72,9 +72,9 @@ func TestComposeProduceAndConsume(t *testing.T) {
 	}
 	var produceResp struct {
 		Offsets []struct {
-			Partition int32   `json:"partition"`
-			Offset    int64   `json:"offset"`
-			ErrorCode *int16  `json:"error_code"`
+			Partition *int32  `json:"partition"`
+			Offset    *int64  `json:"offset"`
+			ErrorCode *int    `json:"error_code"`
 			Error     *string `json:"error"`
 		} `json:"offsets"`
 	}

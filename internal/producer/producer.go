@@ -35,7 +35,7 @@ func (r Record) SizeBytes() int64 {
 type Result struct {
 	Partition int32
 	Offset    int64
-	ErrorCode *int16
+	ErrorCode *int
 	Err       error
 }
 

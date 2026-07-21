@@ -3,7 +3,6 @@ package franz
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -11,7 +10,6 @@ import (
 	"github.com/example/kafka-rest-proxy-go/internal/config"
 	"github.com/example/kafka-rest-proxy-go/internal/limits"
 	"github.com/example/kafka-rest-proxy-go/internal/producer"
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -251,10 +249,9 @@ func saslMechanism(cfg config.SASLConfig) (sasl.Mechanism, error) {
 	}
 }
 
-func kafkaErrorCode(err error) (int16, bool) {
-	var ke *kerr.Error
-	if errors.As(err, &ke) && ke != nil {
-		return ke.Code, true
+func kafkaErrorCode(err error) (int, bool) {
+	if err == nil {
+		return 0, false
 	}
-	return 500, true
+	return 50002, true
 }

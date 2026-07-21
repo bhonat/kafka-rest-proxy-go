@@ -1,0 +1,55 @@
+{
+  "name": "kafka-record-error",
+  "request": {
+    "method": "POST",
+    "path": "/topics/orders",
+    "headers": {
+      "Content-Type": "application/vnd.kafka.json.v2+json",
+      "Accept": "application/vnd.kafka.v2+json"
+    },
+    "body": {
+      "records": [
+        {
+          "value": {
+            "ok": true
+          }
+        },
+        {
+          "value": {
+            "ok": false
+          }
+        }
+      ]
+    }
+  },
+  "producer_results": [
+    {
+      "partition": 2,
+      "offset": 91823
+    },
+    {
+      "error_code": 50002,
+      "error": "Invalid topics: [bad topic]"
+    }
+  ],
+  "expect": {
+    "status": 200,
+    "content_type": "application/vnd.kafka.v2+json",
+    "body": {
+      "offsets": [
+        {
+          "partition": 2,
+          "offset": 91823,
+          "error_code": null,
+          "error": null
+        },
+        {
+          "partition": null,
+          "offset": null,
+          "error_code": 50002,
+          "error": "Invalid topics: [bad topic]"
+        }
+      ]
+    }
+  }
+}
