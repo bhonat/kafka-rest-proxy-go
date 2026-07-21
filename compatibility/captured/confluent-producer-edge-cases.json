@@ -1,0 +1,202 @@
+{
+  "generated_at": "2026-07-21T05:19:11+01:00",
+  "target_url": "http://localhost:8082",
+  "cases": [
+    {
+      "name": "bad-content-type",
+      "request": {
+        "method": "POST",
+        "path": "/topics/orders",
+        "headers": {
+          "Accept": "application/vnd.kafka.v2+json",
+          "Content-Type": "text/plain"
+        },
+        "body": "{\"records\":[{\"value\":{\"ok\":true}}]}"
+      },
+      "response": {
+        "status": 415,
+        "headers": {
+          "Content-Type": "application/vnd.kafka.v2+json"
+        },
+        "body": {
+          "error_code": 415,
+          "message": "HTTP 415 Unsupported Media Type"
+        },
+        "body_is_json": true,
+        "elapsed_ms": 16
+      }
+    },
+    {
+      "name": "bad-accept",
+      "request": {
+        "method": "POST",
+        "path": "/topics/orders",
+        "headers": {
+          "Accept": "application/xml",
+          "Content-Type": "application/vnd.kafka.json.v2+json"
+        },
+        "body": "{\"records\":[{\"value\":{\"ok\":true}}]}"
+      },
+      "response": {
+        "status": 406,
+        "headers": {},
+        "body": {
+          "error_code": 406,
+          "message": "HTTP 406 Not Acceptable"
+        },
+        "body_is_json": true,
+        "elapsed_ms": 1
+      }
+    },
+    {
+      "name": "invalid-topic",
+      "request": {
+        "method": "POST",
+        "path": "/topics/bad%20topic",
+        "headers": {
+          "Accept": "application/vnd.kafka.v2+json",
+          "Content-Type": "application/vnd.kafka.json.v2+json"
+        },
+        "body": "{\"records\":[{\"value\":{\"ok\":true}}]}"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/vnd.kafka.v2+json"
+        },
+        "body": {
+          "offsets": [
+            {
+              "partition": null,
+              "offset": null,
+              "error_code": 50002,
+              "error": "Invalid topics: [bad topic]"
+            }
+          ],
+          "key_schema_id": null,
+          "value_schema_id": null
+        },
+        "body_is_json": true,
+        "elapsed_ms": 9
+      }
+    },
+    {
+      "name": "invalid-partition",
+      "request": {
+        "method": "POST",
+        "path": "/topics/orders",
+        "headers": {
+          "Accept": "application/vnd.kafka.v2+json",
+          "Content-Type": "application/vnd.kafka.json.v2+json"
+        },
+        "body": "{\"records\":[{\"partition\":999999,\"value\":{\"ok\":true}}]}"
+      },
+      "response": {
+        "status": 0,
+        "headers": null,
+        "body_is_json": false,
+        "elapsed_ms": 10002,
+        "request_error": "Post \"http://localhost:8082/topics/orders\": context deadline exceeded"
+      }
+    },
+    {
+      "name": "oversized-body",
+      "request": {
+        "method": "POST",
+        "path": "/topics/orders",
+        "headers": {
+          "Accept": "application/vnd.kafka.v2+json",
+          "Content-Type": "application/vnd.kafka.json.v2+json"
+        },
+        "body": "{\"records\":[{\"value\":{\"payload\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n... truncated 2095142 bytes ..."
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/vnd.kafka.v2+json"
+        },
+        "body": {
+          "offsets": [
+            {
+              "partition": null,
+              "offset": null,
+              "error_code": 50002,
+              "error": "The message is 2097254 bytes when serialized which is larger than 1048576, which is the value of the max.request.size configuration."
+            }
+          ],
+          "key_schema_id": null,
+          "value_schema_id": null
+        },
+        "body_is_json": true,
+        "elapsed_ms": 104
+      }
+    },
+    {
+      "name": "malformed-json",
+      "request": {
+        "method": "POST",
+        "path": "/topics/orders",
+        "headers": {
+          "Accept": "application/vnd.kafka.v2+json",
+          "Content-Type": "application/vnd.kafka.json.v2+json"
+        },
+        "body": "{\"records\":["
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "Content-Type": "application/vnd.kafka.v2+json"
+        },
+        "body": {
+          "error_code": 400,
+          "message": "Unexpected end-of-input: expected close marker for Array (start marker at [Source: REDACTED (`INCLUDE_SOURCE_IN_LOCATION` disabled); line: 1, column: 12])"
+        },
+        "body_is_json": true,
+        "elapsed_ms": 6
+      }
+    },
+    {
+      "name": "binary-decode-failure",
+      "request": {
+        "method": "POST",
+        "path": "/topics/orders",
+        "headers": {
+          "Accept": "application/vnd.kafka.v2+json",
+          "Content-Type": "application/vnd.kafka.binary.v2+json"
+        },
+        "body": "{\"records\":[{\"value\":\"not-base64!\"}]}"
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "Content-Type": "application/vnd.kafka.v2+json"
+        },
+        "body": {
+          "error_code": 400,
+          "message": "Bad Request: data=\"not-base64!\" is not a valid base64 string."
+        },
+        "body_is_json": true,
+        "elapsed_ms": 15
+      }
+    },
+    {
+      "name": "partial-record-errors",
+      "request": {
+        "method": "POST",
+        "path": "/topics/orders",
+        "headers": {
+          "Accept": "application/vnd.kafka.v2+json",
+          "Content-Type": "application/vnd.kafka.json.v2+json"
+        },
+        "body": "{\"records\":[{\"partition\":0,\"value\":{\"ok\":true}},{\"partition\":999999,\"value\":{\"ok\":false}}]}"
+      },
+      "response": {
+        "status": 0,
+        "headers": null,
+        "body_is_json": false,
+        "elapsed_ms": 10001,
+        "request_error": "Post \"http://localhost:8082/topics/orders\": context deadline exceeded"
+      }
+    }
+  ]
+}

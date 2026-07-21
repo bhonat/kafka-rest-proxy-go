@@ -74,6 +74,25 @@ services:
       REQUEST_MAX_HEADER_BYTES: 65536
       TOPIC_ALLOWLIST: orders,binary-events,integration-*
       PRODUCE_TIMEOUT: 30s
+      PPROF_ENABLE: "false"
+
+  confluent-rest-proxy:
+    image: confluentinc/cp-kafka-rest:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+    container_name: kafka-rest-proxy-go-confluent-rest-proxy
+    profiles:
+      - comparison
+    depends_on:
+      init-topics:
+        condition: service_completed_successfully
+    ports:
+      - "8082:8082"
+    environment:
+      KAFKA_REST_HOST_NAME: confluent-rest-proxy
+      KAFKA_REST_LISTENERS: http://0.0.0.0:8082
+      KAFKA_REST_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
+      KAFKA_REST_CLIENT_ID: confluent-rest-proxy-local
+      KAFKA_REST_PRODUCER_ACKS: all
+      KAFKA_REST_PRODUCER_COMPRESSION_TYPE: lz4
 
   prometheus:
     image: prom/prometheus:latest

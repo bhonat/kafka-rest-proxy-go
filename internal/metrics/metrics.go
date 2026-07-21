@@ -26,6 +26,9 @@ type Metrics struct {
 	recordsFailed   metric.Int64Counter
 	requestBytes    metric.Int64Counter
 	produceLatency  metric.Float64Histogram
+	decodeLatency   metric.Float64Histogram
+	callbackWait    metric.Float64Histogram
+	rejections      metric.Int64Counter
 
 	outstandingRequests atomic.Int64
 	admissionSnapshot   func() (usedRecords, maxRecords, usedBytes, maxBytes int64)
@@ -39,6 +42,22 @@ func New() (*Metrics, error) {
 		return nil, err
 	}
 
+	latencyBuckets := []float64{
+		0.001,
+		0.0025,
+		0.005,
+		0.01,
+		0.025,
+		0.05,
+		0.1,
+		0.25,
+		0.5,
+		1,
+		2.5,
+		5,
+		10,
+	}
+
 	provider := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(resource.NewSchemaless(
 			attribute.String("service.name", "kafka-rest-proxy-go"),
@@ -47,21 +66,19 @@ func New() (*Metrics, error) {
 		sdkmetric.WithView(sdkmetric.NewView(
 			sdkmetric.Instrument{Name: "kafka_rest_produce_latency"},
 			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
-				Boundaries: []float64{
-					0.001,
-					0.0025,
-					0.005,
-					0.01,
-					0.025,
-					0.05,
-					0.1,
-					0.25,
-					0.5,
-					1,
-					2.5,
-					5,
-					10,
-				},
+				Boundaries: latencyBuckets,
+			}},
+		)),
+		sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: "kafka_rest_decode_latency"},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+				Boundaries: latencyBuckets,
+			}},
+		)),
+		sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: "kafka_rest_kafka_callback_wait_latency"},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+				Boundaries: latencyBuckets,
 			}},
 		)),
 	)
@@ -107,6 +124,26 @@ func New() (*Metrics, error) {
 		"kafka_rest_produce_latency",
 		metric.WithDescription("End-to-end HTTP produce request latency."),
 		metric.WithUnit("s"),
+	); err != nil {
+		return nil, err
+	}
+	if m.decodeLatency, err = meter.Float64Histogram(
+		"kafka_rest_decode_latency",
+		metric.WithDescription("Request body decode and validation latency."),
+		metric.WithUnit("s"),
+	); err != nil {
+		return nil, err
+	}
+	if m.callbackWait, err = meter.Float64Histogram(
+		"kafka_rest_kafka_callback_wait_latency",
+		metric.WithDescription("Time spent waiting for Kafka producer callbacks for a request."),
+		metric.WithUnit("s"),
+	); err != nil {
+		return nil, err
+	}
+	if m.rejections, err = meter.Int64Counter(
+		"kafka_rest_admission_rejections",
+		metric.WithDescription("Requests rejected because local producer admission capacity was exhausted."),
 	); err != nil {
 		return nil, err
 	}
@@ -203,6 +240,23 @@ func (m *Metrics) ObserveProduceResult(successes, failures int) {
 	if failures > 0 {
 		m.recordsFailed.Add(ctx, int64(failures))
 	}
+}
+
+func (m *Metrics) ObserveDecode(format string, success bool, duration time.Duration) {
+	ctx := context.Background()
+	m.decodeLatency.Record(ctx, duration.Seconds(), metric.WithAttributes(
+		attribute.String("format", format),
+		attribute.Bool("success", success),
+	))
+}
+
+func (m *Metrics) ObserveKafkaCallbackWait(status int, duration time.Duration) {
+	ctx := context.Background()
+	m.callbackWait.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.String("status_class", statusClass(status))))
+}
+
+func (m *Metrics) ObserveAdmissionRejected() {
+	m.rejections.Add(context.Background(), 1)
 }
 
 func (m *Metrics) IncOutstanding() {

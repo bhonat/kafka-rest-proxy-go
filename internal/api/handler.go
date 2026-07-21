@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ type Config struct {
 	AllowedTopics   []string
 	ProduceTimeout  time.Duration
 	BearerTokens    []string
+	PprofEnable     bool
 }
 
 type Handler struct {
@@ -88,6 +90,14 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("/readyz", h.handleReady)
 	if h.metrics != nil {
 		mux.Handle("/metrics", h.metrics.Handler())
+	}
+	if h.cfg.PprofEnable {
+		mux.HandleFunc("/debug/pprof", pprof.Index)
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	}
 	return h.authMiddleware(mux)
 }
@@ -174,7 +184,11 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	decodeStart := time.Now()
 	records, err := decodeProduceRequest(topic, body, format, h.cfg.decodeLimits())
+	if h.metrics != nil {
+		h.metrics.ObserveDecode(format.String(), err == nil, time.Since(decodeStart))
+	}
 	if err != nil {
 		status = http.StatusUnprocessableEntity
 		var ve validationError
@@ -190,17 +204,26 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), h.cfg.ProduceTimeout)
 	defer cancel()
 
+	produceStart := time.Now()
 	results, err := h.producer.Produce(ctx, records)
+	produceWait := time.Since(produceStart)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			err = contextCanceled
 		}
 		status, code, msg := classifyProduceError(err)
+		if h.metrics != nil {
+			h.metrics.ObserveKafkaCallbackWait(status, produceWait)
+			if errors.Is(err, producer.ErrOverloaded) {
+				h.metrics.ObserveAdmissionRejected()
+			}
+		}
 		writeAPIError(w, status, code, msg)
 		return
 	}
 
 	if h.metrics != nil {
+		h.metrics.ObserveKafkaCallbackWait(status, produceWait)
 		successes, failures := countResultStatus(results)
 		h.metrics.ObserveProduceResult(successes, failures)
 	}

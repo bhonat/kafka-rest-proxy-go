@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	HTTPAddr              string
+	PprofEnable           bool
 	ReadHeaderTimeout     time.Duration
 	ShutdownTimeout       time.Duration
 	ProduceTimeout        time.Duration
@@ -53,6 +54,7 @@ type SASLConfig struct {
 func LoadFromEnv() (Config, error) {
 	cfg := Config{
 		HTTPAddr:              envString("HTTP_ADDR", ":8080"),
+		PprofEnable:           envBool("PPROF_ENABLE", false),
 		ReadHeaderTimeout:     envDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
 		ShutdownTimeout:       envDuration("SHUTDOWN_TIMEOUT", 20*time.Second),
 		ProduceTimeout:        envDuration("PRODUCE_TIMEOUT", 30*time.Second),

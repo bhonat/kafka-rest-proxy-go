@@ -9,9 +9,11 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +29,21 @@ type produceRecord struct {
 	Value map[string]any `json:"value"`
 }
 
+type targetFlags []targetSpec
+
+type targetSpec struct {
+	Name string
+	URL  string
+}
+
+type scenarioSpec struct {
+	PayloadBytes      int
+	RecordsPerRequest int
+	Clients           int
+	Compression       string
+	Acks              string
+}
+
 type result struct {
 	status  int
 	records int64
@@ -35,71 +52,239 @@ type result struct {
 	err     error
 }
 
-type benchConfig struct {
-	URL          string
-	Topic        string
-	Duration     string
-	Clients      int
-	Records      int
-	PayloadBytes int
-	Requests     int64
-	Timeout      string
-	KeyPrefix    string
+type benchOptions struct {
+	Topic       string
+	Duration    time.Duration
+	Requests    int64
+	Timeout     time.Duration
+	MaxSamples  int
+	KeyPrefix   string
+	Targets     []targetSpec
+	Scenarios   []scenarioSpec
+	HTMLPath    string
+	Suite       bool
+	GeneratedAt time.Time
 }
 
-type benchSummary struct {
+type benchResult struct {
 	GeneratedAt       string
-	Config            benchConfig
+	TargetName        string
+	TargetURL         string
+	Scenario          string
+	Topic             string
+	Duration          string
+	RequestsLimit     int64
+	Timeout           string
+	KeyPrefix         string
+	PayloadBytes      int
+	RecordsPerRequest int
+	Clients           int
+	Compression       string
+	Acks              string
 	Elapsed           string
 	TotalRequests     int64
 	SuccessRequests   int64
 	FailedRequests    int64
-	TotalRecords      int64
-	TotalBytes        int64
-	RequestsPerSecond string
-	RecordsPerSecond  string
-	MiBPerSecond      string
-	FailureRate       string
-	LatencyP50        string
-	LatencyP95        string
-	LatencyP99        string
+	AttemptedRecords  int64
+	SuccessRecords    int64
+	RequestBytes      int64
+	RequestsPerSecond float64
+	RecordsPerSecond  float64
+	MiBPerSecond      float64
+	FailureRate       float64
+	LatencyP50        time.Duration
+	LatencyP95        time.Duration
+	LatencyP99        time.Duration
 	LatencySamples    int
-	LatencyP50Millis  string
-	LatencyP95Millis  string
-	LatencyP99Millis  string
+	Error             string
+
+	RequestsPerSecondText string
+	RecordsPerSecondText  string
+	MiBPerSecondText      string
+	FailureRateText       string
+	LatencyP50Text        string
+	LatencyP95Text        string
+	LatencyP99Text        string
+	LatencyP50Millis      string
+	LatencyP95Millis      string
+	LatencyP99Millis      string
+}
+
+type benchReport struct {
+	GeneratedAt string
+	Suite       bool
+	Targets     []targetSpec
+	Results     []benchResult
+	Comparisons []comparisonRow
+}
+
+type comparisonRow struct {
+	Scenario                 string
+	Winner                   string
+	BestRecordsPerSecondText string
+	Results                  []benchResult
 }
 
 func main() {
+	var targets targetFlags
 	var (
-		baseURL      = flag.String("url", "http://localhost:8080", "REST proxy base URL")
-		topic        = flag.String("topic", "orders", "Kafka topic")
-		duration     = flag.Duration("duration", 30*time.Second, "benchmark duration")
-		clients      = flag.Int("clients", 32, "concurrent HTTP clients")
-		records      = flag.Int("records", 10, "records per HTTP request")
-		payloadBytes = flag.Int("payload-bytes", 512, "payload string bytes per record")
-		requests     = flag.Int64("requests", 0, "optional max HTTP requests; 0 means duration-based")
-		timeout      = flag.Duration("timeout", 30*time.Second, "per-request timeout")
-		maxSamples   = flag.Int("max-latency-samples", 1_000_000, "max latency samples retained for percentiles")
-		keyPrefix    = flag.String("key-prefix", "", "optional static key prefix; empty omits keys for partition spreading")
-		htmlPath     = flag.String("html", "", "optional path for standalone HTML benchmark report")
+		baseURL           = flag.String("url", "http://localhost:8080", "REST proxy base URL used when -target is not provided")
+		confluentURL      = flag.String("confluent-url", "", "optional Confluent REST Proxy URL; adds target name 'confluent'")
+		topic             = flag.String("topic", "orders", "Kafka topic")
+		duration          = flag.Duration("duration", 30*time.Second, "benchmark duration per target/scenario")
+		clients           = flag.Int("clients", 32, "concurrent HTTP clients for single-scenario mode")
+		records           = flag.Int("records", 10, "records per HTTP request for single-scenario mode")
+		payloadBytes      = flag.Int("payload-bytes", 512, "payload string bytes per record for single-scenario mode")
+		requests          = flag.Int64("requests", 0, "optional max HTTP requests per target/scenario; 0 means duration-based")
+		timeout           = flag.Duration("timeout", 30*time.Second, "per-request timeout")
+		maxSamples        = flag.Int("max-latency-samples", 1_000_000, "max latency samples retained per target/scenario")
+		keyPrefix         = flag.String("key-prefix", "", "optional static key prefix; empty omits keys for partition spreading")
+		htmlPath          = flag.String("html", "", "optional path for standalone HTML benchmark report")
+		suite             = flag.Bool("suite", false, "run the multi-scenario benchmark suite")
+		payloadSizes      = flag.String("payload-sizes", "128,512,1KB,10KB", "comma-separated payload sizes for suite mode; supports B, KB, KiB, MB, MiB")
+		recordsPerRequest = flag.String("records-per-request", "1,10,100,1000", "comma-separated records/request values for suite mode")
+		clientCounts      = flag.String("client-counts", "4,16,64,256", "comma-separated concurrent client counts for suite mode")
+		compressionLabels = flag.String("compression-labels", "runtime", "comma-separated suite labels for externally configured Kafka compression variants")
+		acksLabels        = flag.String("acks-labels", "runtime", "comma-separated suite labels for externally configured Kafka required-acks variants")
+		compressionLabel  = flag.String("compression-label", "runtime", "single-scenario label for externally configured Kafka compression")
+		acksLabel         = flag.String("acks-label", "runtime", "single-scenario label for externally configured Kafka required-acks")
 	)
+	flag.Var(&targets, "target", "benchmark target in name=url form; repeat for comparison, for example -target go=http://localhost:8080 -target confluent=http://localhost:8082")
 	flag.Parse()
 
-	if *clients <= 0 || *records <= 0 || *payloadBytes < 0 || *duration <= 0 {
-		fmt.Fprintln(os.Stderr, "clients, records, payload-bytes, and duration must be valid positive values")
-		os.Exit(2)
-	}
-
-	body, err := buildBody(*records, *payloadBytes, *keyPrefix)
+	opts, err := buildOptions(*baseURL, *confluentURL, targets, *topic, *duration, *requests, *timeout, *maxSamples, *keyPrefix, *htmlPath, *suite, *payloadBytes, *records, *clients, *payloadSizes, *recordsPerRequest, *clientCounts, *compressionLabels, *acksLabels, *compressionLabel, *acksLabel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 
-	results := make(chan result, *clients*4)
+	report := benchReport{
+		GeneratedAt: opts.GeneratedAt.Format(time.RFC3339),
+		Suite:       opts.Suite,
+		Targets:     opts.Targets,
+	}
+
+	for _, scenario := range opts.Scenarios {
+		for _, target := range opts.Targets {
+			res := runScenario(opts, target, scenario)
+			report.Results = append(report.Results, res)
+			printResult(res)
+		}
+	}
+
+	report.Comparisons = buildComparisons(report.Results)
+
+	if opts.HTMLPath != "" {
+		if err := writeHTMLReport(opts.HTMLPath, report); err != nil {
+			fmt.Fprintf(os.Stderr, "write html report: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("html_report=%s\n", opts.HTMLPath)
+	}
+}
+
+func buildOptions(baseURL, confluentURL string, targets targetFlags, topic string, duration time.Duration, requests int64, timeout time.Duration, maxSamples int, keyPrefix, htmlPath string, suite bool, payloadBytes, records, clients int, payloadSizes, recordsPerRequest, clientCounts, compressionLabels, acksLabels, compressionLabel, acksLabel string) (benchOptions, error) {
+	if strings.TrimSpace(topic) == "" {
+		return benchOptions{}, fmt.Errorf("topic must not be empty")
+	}
+	if duration <= 0 || timeout <= 0 {
+		return benchOptions{}, fmt.Errorf("duration and timeout must be positive")
+	}
+	if maxSamples <= 0 {
+		return benchOptions{}, fmt.Errorf("max-latency-samples must be positive")
+	}
+
+	targetsOut := append([]targetSpec(nil), targets...)
+	if len(targetsOut) == 0 {
+		t, err := parseTarget("go=" + baseURL)
+		if err != nil {
+			return benchOptions{}, err
+		}
+		targetsOut = append(targetsOut, t)
+	}
+	if strings.TrimSpace(confluentURL) != "" {
+		t, err := parseTarget("confluent=" + confluentURL)
+		if err != nil {
+			return benchOptions{}, err
+		}
+		targetsOut = append(targetsOut, t)
+	}
+
+	var scenarios []scenarioSpec
+	if suite {
+		payloads, err := parseByteSizeList(payloadSizes)
+		if err != nil {
+			return benchOptions{}, fmt.Errorf("payload-sizes: %w", err)
+		}
+		recordCounts, err := parseIntList(recordsPerRequest)
+		if err != nil {
+			return benchOptions{}, fmt.Errorf("records-per-request: %w", err)
+		}
+		clientsList, err := parseIntList(clientCounts)
+		if err != nil {
+			return benchOptions{}, fmt.Errorf("client-counts: %w", err)
+		}
+		compressions := parseLabelList(compressionLabels)
+		acksValues := parseLabelList(acksLabels)
+		for _, payload := range payloads {
+			for _, recs := range recordCounts {
+				for _, clientCount := range clientsList {
+					for _, compression := range compressions {
+						for _, acks := range acksValues {
+							scenarios = append(scenarios, scenarioSpec{
+								PayloadBytes:      payload,
+								RecordsPerRequest: recs,
+								Clients:           clientCount,
+								Compression:       compression,
+								Acks:              acks,
+							})
+						}
+					}
+				}
+			}
+		}
+	} else {
+		if clients <= 0 || records <= 0 || payloadBytes < 0 {
+			return benchOptions{}, fmt.Errorf("clients and records must be positive, and payload-bytes must be zero or positive")
+		}
+		scenarios = []scenarioSpec{{
+			PayloadBytes:      payloadBytes,
+			RecordsPerRequest: records,
+			Clients:           clients,
+			Compression:       firstLabel(compressionLabel),
+			Acks:              firstLabel(acksLabel),
+		}}
+	}
+
+	if len(scenarios) == 0 {
+		return benchOptions{}, fmt.Errorf("at least one scenario is required")
+	}
+
+	return benchOptions{
+		Topic:       topic,
+		Duration:    duration,
+		Requests:    requests,
+		Timeout:     timeout,
+		MaxSamples:  maxSamples,
+		KeyPrefix:   keyPrefix,
+		Targets:     targetsOut,
+		Scenarios:   scenarios,
+		HTMLPath:    htmlPath,
+		Suite:       suite,
+		GeneratedAt: time.Now(),
+	}, nil
+}
+
+func runScenario(opts benchOptions, target targetSpec, scenario scenarioSpec) benchResult {
+	body, err := buildBody(scenario.RecordsPerRequest, scenario.PayloadBytes, opts.KeyPrefix)
+	if err != nil {
+		return failedResult(opts, target, scenario, err)
+	}
+
+	results := make(chan result, scenario.Clients*4)
 	var started atomic.Int64
 	var wg sync.WaitGroup
-	stop := time.NewTimer(*duration)
+	stop := time.NewTimer(opts.Duration)
 	defer stop.Stop()
 	done := make(chan struct{})
 	start := time.Now()
@@ -108,13 +293,13 @@ func main() {
 		close(done)
 	}()
 
-	for i := 0; i < *clients; i++ {
+	for i := 0; i < scenario.Clients; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			client := &http.Client{Timeout: *timeout}
+			client := &http.Client{Timeout: opts.Timeout}
 			for {
-				if *requests > 0 && started.Add(1) > *requests {
+				if opts.Requests > 0 && started.Add(1) > opts.Requests {
 					return
 				}
 				select {
@@ -122,7 +307,7 @@ func main() {
 					return
 				default:
 				}
-				results <- postOnce(client, *baseURL, *topic, body, int64(*records), *timeout)
+				results <- postOnce(client, target.URL, opts.Topic, body, int64(scenario.RecordsPerRequest), opts.Timeout)
 			}
 		}()
 	}
@@ -132,45 +317,30 @@ func main() {
 		close(results)
 	}()
 
-	var totalRequests, successRequests, failedRequests, totalRecords, totalBytes int64
-	latencies := make([]time.Duration, 0, min(*maxSamples, 100_000))
+	var totalRequests, successRequests, failedRequests, attemptedRecords, successRecords, requestBytes int64
+	latencies := make([]time.Duration, 0, min(opts.MaxSamples, 100_000))
 	for res := range results {
 		totalRequests++
-		totalRecords += res.records
-		totalBytes += res.bytes
+		attemptedRecords += res.records
+		requestBytes += res.bytes
 		if res.err != nil || res.status < 200 || res.status >= 300 {
 			failedRequests++
 		} else {
 			successRequests++
+			successRecords += res.records
 		}
-		if len(latencies) < *maxSamples {
+		if len(latencies) < opts.MaxSamples {
 			latencies = append(latencies, res.latency)
 		}
 	}
 
 	elapsed := time.Since(start)
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	return summarize(opts, target, scenario, elapsed, totalRequests, successRequests, failedRequests, attemptedRecords, successRecords, requestBytes, latencies, "")
+}
 
-	summary := summarize(benchConfig{
-		URL:          *baseURL,
-		Topic:        *topic,
-		Duration:     duration.String(),
-		Clients:      *clients,
-		Records:      *records,
-		PayloadBytes: *payloadBytes,
-		Requests:     *requests,
-		Timeout:      timeout.String(),
-		KeyPrefix:    *keyPrefix,
-	}, elapsed, totalRequests, successRequests, failedRequests, totalRecords, totalBytes, latencies)
-
-	printSummary(summary)
-	if *htmlPath != "" {
-		if err := writeHTMLReport(*htmlPath, summary); err != nil {
-			fmt.Fprintf(os.Stderr, "write html report: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("html_report=%s\n", *htmlPath)
-	}
+func failedResult(opts benchOptions, target targetSpec, scenario scenarioSpec, err error) benchResult {
+	return summarize(opts, target, scenario, 0, 0, 0, 0, 0, 0, 0, nil, err.Error())
 }
 
 func buildBody(records, payloadBytes int, keyPrefix string) ([]byte, error) {
@@ -195,10 +365,10 @@ func buildBody(records, payloadBytes int, keyPrefix string) ([]byte, error) {
 
 func postOnce(client *http.Client, baseURL, topic string, body []byte, records int64, timeout time.Duration) result {
 	start := time.Now()
-	url := strings.TrimRight(baseURL, "/") + "/topics/" + topic
+	u := strings.TrimRight(baseURL, "/") + "/topics/" + url.PathEscape(topic)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return result{err: err, latency: time.Since(start)}
 	}
@@ -219,6 +389,66 @@ func postOnce(client *http.Client, baseURL, topic string, body []byte, records i
 	}
 }
 
+func summarize(opts benchOptions, target targetSpec, scenario scenarioSpec, elapsed time.Duration, totalRequests, successRequests, failedRequests, attemptedRecords, successRecords, requestBytes int64, latencies []time.Duration, errText string) benchResult {
+	elapsedSeconds := max(elapsed.Seconds(), 0.001)
+	p50 := percentile(latencies, 0.50)
+	p95 := percentile(latencies, 0.95)
+	p99 := percentile(latencies, 0.99)
+
+	var failureRate float64
+	if totalRequests > 0 {
+		failureRate = float64(failedRequests) / float64(totalRequests) * 100
+	}
+
+	rps := float64(totalRequests) / elapsedSeconds
+	recordsPerSec := float64(successRecords) / elapsedSeconds
+	mibPerSec := float64(requestBytes) / (1024 * 1024) / elapsedSeconds
+
+	res := benchResult{
+		GeneratedAt:       opts.GeneratedAt.Format(time.RFC3339),
+		TargetName:        target.Name,
+		TargetURL:         target.URL,
+		Scenario:          scenarioLabel(scenario),
+		Topic:             opts.Topic,
+		Duration:          opts.Duration.String(),
+		RequestsLimit:     opts.Requests,
+		Timeout:           opts.Timeout.String(),
+		KeyPrefix:         opts.KeyPrefix,
+		PayloadBytes:      scenario.PayloadBytes,
+		RecordsPerRequest: scenario.RecordsPerRequest,
+		Clients:           scenario.Clients,
+		Compression:       scenario.Compression,
+		Acks:              scenario.Acks,
+		Elapsed:           elapsed.Round(time.Millisecond).String(),
+		TotalRequests:     totalRequests,
+		SuccessRequests:   successRequests,
+		FailedRequests:    failedRequests,
+		AttemptedRecords:  attemptedRecords,
+		SuccessRecords:    successRecords,
+		RequestBytes:      requestBytes,
+		RequestsPerSecond: rps,
+		RecordsPerSecond:  recordsPerSec,
+		MiBPerSecond:      mibPerSec,
+		FailureRate:       failureRate,
+		LatencyP50:        p50,
+		LatencyP95:        p95,
+		LatencyP99:        p99,
+		LatencySamples:    len(latencies),
+		Error:             errText,
+	}
+	res.RequestsPerSecondText = fmt.Sprintf("%.2f", res.RequestsPerSecond)
+	res.RecordsPerSecondText = fmt.Sprintf("%.2f", res.RecordsPerSecond)
+	res.MiBPerSecondText = fmt.Sprintf("%.2f", res.MiBPerSecond)
+	res.FailureRateText = fmt.Sprintf("%.2f%%", res.FailureRate)
+	res.LatencyP50Text = p50.Round(time.Millisecond).String()
+	res.LatencyP95Text = p95.Round(time.Millisecond).String()
+	res.LatencyP99Text = p99.Round(time.Millisecond).String()
+	res.LatencyP50Millis = fmt.Sprintf("%.2f", float64(p50)/float64(time.Millisecond))
+	res.LatencyP95Millis = fmt.Sprintf("%.2f", float64(p95)/float64(time.Millisecond))
+	res.LatencyP99Millis = fmt.Sprintf("%.2f", float64(p99)/float64(time.Millisecond))
+	return res
+}
+
 func percentile(sorted []time.Duration, p float64) time.Duration {
 	if len(sorted) == 0 {
 		return 0
@@ -233,58 +463,219 @@ func percentile(sorted []time.Duration, p float64) time.Duration {
 	return sorted[idx]
 }
 
-func summarize(cfg benchConfig, elapsed time.Duration, totalRequests, successRequests, failedRequests, totalRecords, totalBytes int64, latencies []time.Duration) benchSummary {
-	elapsedSeconds := max(elapsed.Seconds(), 0.001)
-	p50 := percentile(latencies, 0.50)
-	p95 := percentile(latencies, 0.95)
-	p99 := percentile(latencies, 0.99)
-
-	var failureRate float64
-	if totalRequests > 0 {
-		failureRate = float64(failedRequests) / float64(totalRequests) * 100
-	}
-
-	return benchSummary{
-		GeneratedAt:       time.Now().Format(time.RFC3339),
-		Config:            cfg,
-		Elapsed:           elapsed.Round(time.Millisecond).String(),
-		TotalRequests:     totalRequests,
-		SuccessRequests:   successRequests,
-		FailedRequests:    failedRequests,
-		TotalRecords:      totalRecords,
-		TotalBytes:        totalBytes,
-		RequestsPerSecond: fmt.Sprintf("%.2f", float64(totalRequests)/elapsedSeconds),
-		RecordsPerSecond:  fmt.Sprintf("%.2f", float64(totalRecords)/elapsedSeconds),
-		MiBPerSecond:      fmt.Sprintf("%.2f", float64(totalBytes)/(1024*1024)/elapsedSeconds),
-		FailureRate:       fmt.Sprintf("%.2f%%", failureRate),
-		LatencyP50:        p50.Round(time.Millisecond).String(),
-		LatencyP95:        p95.Round(time.Millisecond).String(),
-		LatencyP99:        p99.Round(time.Millisecond).String(),
-		LatencySamples:    len(latencies),
-		LatencyP50Millis:  fmt.Sprintf("%.2f", float64(p50)/float64(time.Millisecond)),
-		LatencyP95Millis:  fmt.Sprintf("%.2f", float64(p95)/float64(time.Millisecond)),
-		LatencyP99Millis:  fmt.Sprintf("%.2f", float64(p99)/float64(time.Millisecond)),
+func printResult(res benchResult) {
+	fmt.Printf("target=%s scenario=%q elapsed=%s requests=%d success=%d failed=%d records=%d records_per_sec=%s requests_per_sec=%s latency_p50=%s latency_p95=%s latency_p99=%s failure_rate=%s\n",
+		res.TargetName,
+		res.Scenario,
+		res.Elapsed,
+		res.TotalRequests,
+		res.SuccessRequests,
+		res.FailedRequests,
+		res.SuccessRecords,
+		res.RecordsPerSecondText,
+		res.RequestsPerSecondText,
+		res.LatencyP50Text,
+		res.LatencyP95Text,
+		res.LatencyP99Text,
+		res.FailureRateText,
+	)
+	if res.Error != "" {
+		fmt.Printf("target=%s scenario=%q error=%s\n", res.TargetName, res.Scenario, res.Error)
 	}
 }
 
-func printSummary(summary benchSummary) {
-	fmt.Printf("elapsed=%s\n", summary.Elapsed)
-	fmt.Printf("requests=%d success=%d failed=%d\n", summary.TotalRequests, summary.SuccessRequests, summary.FailedRequests)
-	fmt.Printf("records=%d request_bytes=%d\n", summary.TotalRecords, summary.TotalBytes)
-	fmt.Printf("requests_per_sec=%s\n", summary.RequestsPerSecond)
-	fmt.Printf("records_per_sec=%s\n", summary.RecordsPerSecond)
-	fmt.Printf("request_mib_per_sec=%s\n", summary.MiBPerSecond)
-	if summary.LatencySamples > 0 {
-		fmt.Printf("latency_p50=%s latency_p95=%s latency_p99=%s samples=%d\n",
-			summary.LatencyP50,
-			summary.LatencyP95,
-			summary.LatencyP99,
-			summary.LatencySamples,
-		)
+func (t *targetFlags) Set(v string) error {
+	target, err := parseTarget(v)
+	if err != nil {
+		return err
+	}
+	*t = append(*t, target)
+	return nil
+}
+
+func (t *targetFlags) String() string {
+	if t == nil || len(*t) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(*t))
+	for _, target := range *t {
+		parts = append(parts, target.Name+"="+target.URL)
+	}
+	return strings.Join(parts, ",")
+}
+
+func parseTarget(v string) (targetSpec, error) {
+	name, rawURL, ok := strings.Cut(v, "=")
+	if !ok {
+		name = fmt.Sprintf("target%d", time.Now().UnixNano())
+		rawURL = v
+	}
+	name = strings.TrimSpace(name)
+	rawURL = strings.TrimSpace(rawURL)
+	if name == "" || rawURL == "" {
+		return targetSpec{}, fmt.Errorf("target must be name=url")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return targetSpec{}, fmt.Errorf("target %q must be an absolute URL", v)
+	}
+	return targetSpec{Name: name, URL: strings.TrimRight(rawURL, "/")}, nil
+}
+
+func parseByteSizeList(v string) ([]int, error) {
+	parts := splitCSV(v)
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		n, err := parseByteSize(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return positiveInts(out)
+}
+
+func parseIntList(v string) ([]int, error) {
+	parts := splitCSV(v)
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not an integer", part)
+		}
+		out = append(out, n)
+	}
+	return positiveInts(out)
+}
+
+func positiveInts(in []int) ([]int, error) {
+	if len(in) == 0 {
+		return nil, fmt.Errorf("at least one value is required")
+	}
+	for _, n := range in {
+		if n <= 0 {
+			return nil, fmt.Errorf("values must be positive")
+		}
+	}
+	return in, nil
+}
+
+func parseByteSize(v string) (int, error) {
+	raw := strings.ToUpper(strings.TrimSpace(v))
+	raw = strings.ReplaceAll(raw, " ", "")
+	if raw == "" {
+		return 0, fmt.Errorf("empty size")
+	}
+
+	multiplier := 1
+	switch {
+	case strings.HasSuffix(raw, "KIB"):
+		multiplier = 1024
+		raw = strings.TrimSuffix(raw, "KIB")
+	case strings.HasSuffix(raw, "KB"):
+		multiplier = 1000
+		raw = strings.TrimSuffix(raw, "KB")
+	case strings.HasSuffix(raw, "MIB"):
+		multiplier = 1024 * 1024
+		raw = strings.TrimSuffix(raw, "MIB")
+	case strings.HasSuffix(raw, "MB"):
+		multiplier = 1000 * 1000
+		raw = strings.TrimSuffix(raw, "MB")
+	case strings.HasSuffix(raw, "B"):
+		raw = strings.TrimSuffix(raw, "B")
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a valid byte size", v)
+	}
+	return n * multiplier, nil
+}
+
+func parseLabelList(v string) []string {
+	parts := splitCSV(v)
+	if len(parts) == 0 {
+		return []string{"runtime"}
+	}
+	return parts
+}
+
+func firstLabel(v string) string {
+	labels := parseLabelList(v)
+	return labels[0]
+}
+
+func splitCSV(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func scenarioLabel(s scenarioSpec) string {
+	return fmt.Sprintf("payload=%s records/request=%d clients=%d compression=%s acks=%s",
+		formatBytes(s.PayloadBytes),
+		s.RecordsPerRequest,
+		s.Clients,
+		s.Compression,
+		s.Acks,
+	)
+}
+
+func formatBytes(n int) string {
+	switch {
+	case n%1024 == 0 && n >= 1024*1024:
+		return fmt.Sprintf("%dMiB", n/(1024*1024))
+	case n%1024 == 0 && n >= 1024:
+		return fmt.Sprintf("%dKiB", n/1024)
+	default:
+		return fmt.Sprintf("%dB", n)
 	}
 }
 
-func writeHTMLReport(path string, summary benchSummary) error {
+func buildComparisons(results []benchResult) []comparisonRow {
+	grouped := make(map[string][]benchResult)
+	for _, res := range results {
+		grouped[res.Scenario] = append(grouped[res.Scenario], res)
+	}
+	scenarios := make([]string, 0, len(grouped))
+	for scenario := range grouped {
+		scenarios = append(scenarios, scenario)
+	}
+	sort.Strings(scenarios)
+
+	rows := make([]comparisonRow, 0, len(scenarios))
+	for _, scenario := range scenarios {
+		group := grouped[scenario]
+		sort.Slice(group, func(i, j int) bool {
+			return group[i].TargetName < group[j].TargetName
+		})
+		winner := ""
+		var best float64
+		for _, res := range group {
+			if winner == "" || res.RecordsPerSecond > best {
+				winner = res.TargetName
+				best = res.RecordsPerSecond
+			}
+		}
+		rows = append(rows, comparisonRow{
+			Scenario:                 scenario,
+			Winner:                   winner,
+			BestRecordsPerSecondText: fmt.Sprintf("%.2f", best),
+			Results:                  group,
+		})
+	}
+	return rows
+}
+
+func writeHTMLReport(path string, report benchReport) error {
 	if dir := filepath.Dir(path); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -295,7 +686,7 @@ func writeHTMLReport(path string, summary benchSummary) error {
 		return err
 	}
 	defer f.Close()
-	return htmlReportTemplate.Execute(f, summary)
+	return htmlReportTemplate.Execute(f, report)
 }
 
 var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doctype html>
@@ -325,7 +716,7 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
       line-height: 1.45;
     }
     main {
-      width: min(1120px, calc(100vw - 32px));
+      width: min(1280px, calc(100vw - 32px));
       margin: 32px auto;
     }
     h1 { margin: 0 0 6px; font-size: clamp(1.6rem, 2vw, 2.2rem); }
@@ -349,7 +740,7 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
       margin-bottom: 6px;
     }
     .value {
-      font-size: 1.55rem;
+      font-size: 1.45rem;
       font-weight: 650;
       letter-spacing: -.02em;
     }
@@ -361,44 +752,27 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
       border: 1px solid var(--border);
       border-radius: 14px;
       overflow: hidden;
+      margin-bottom: 20px;
     }
     th, td {
       text-align: left;
-      padding: 10px 12px;
+      padding: 9px 10px;
       border-bottom: 1px solid var(--border);
       vertical-align: top;
+      white-space: nowrap;
     }
-    th { color: var(--muted); font-weight: 600; width: 34%; }
+    th { color: var(--muted); font-weight: 600; }
     tr:last-child th, tr:last-child td { border-bottom: 0; }
-    .bars { display: grid; gap: 12px; }
-    .bar-row {
-      display: grid;
-      grid-template-columns: 82px 1fr 90px;
-      gap: 12px;
-      align-items: center;
-    }
-    .track {
-      height: 14px;
-      border-radius: 999px;
-      background: color-mix(in srgb, var(--accent) 15%, Canvas);
-      overflow: hidden;
-      border: 1px solid var(--border);
-    }
-    .fill {
-      height: 100%;
-      width: min(100%, calc(var(--v) * 1%));
-      background: var(--accent);
-      border-radius: inherit;
-    }
+    .scenario { white-space: normal; min-width: 280px; }
+    .target { font-weight: 650; }
     code {
       background: color-mix(in srgb, CanvasText 8%, Canvas);
       padding: 2px 5px;
       border-radius: 5px;
     }
+    .scroll { overflow-x: auto; }
     @media (max-width: 760px) {
       .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .bar-row { grid-template-columns: 70px 1fr; }
-      .bar-row strong { grid-column: 2; }
     }
     @media (max-width: 460px) {
       .grid { grid-template-columns: 1fr; }
@@ -408,37 +782,87 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
 <body>
 <main>
   <h1>Kafka REST Proxy Benchmark Report</h1>
-  <div class="muted">Generated {{ .GeneratedAt }} for <code>{{ .Config.URL }}/topics/{{ .Config.Topic }}</code></div>
+  <div class="muted">Generated {{ .GeneratedAt }}. {{ if .Suite }}Suite mode{{ else }}Single scenario{{ end }} across {{ len .Targets }} target(s).</div>
 
-  <section class="grid" aria-label="Benchmark summary">
-    <div class="card"><div class="label">Records/sec</div><div class="value">{{ .RecordsPerSecond }}</div></div>
-    <div class="card"><div class="label">Requests/sec</div><div class="value">{{ .RequestsPerSecond }}</div></div>
-    <div class="card"><div class="label">p99 latency</div><div class="value">{{ .LatencyP99 }}</div></div>
-    <div class="card"><div class="label">Failure rate</div><div class="value {{ if eq .FailedRequests 0 }}ok{{ else }}bad{{ end }}">{{ .FailureRate }}</div></div>
+  {{ with index .Results 0 }}
+  <section class="grid" aria-label="First benchmark summary">
+    <div class="card"><div class="label">First result records/sec</div><div class="value">{{ .RecordsPerSecondText }}</div></div>
+    <div class="card"><div class="label">First result requests/sec</div><div class="value">{{ .RequestsPerSecondText }}</div></div>
+    <div class="card"><div class="label">First result p99 latency</div><div class="value">{{ .LatencyP99Text }}</div></div>
+    <div class="card"><div class="label">First result failure rate</div><div class="value {{ if eq .FailedRequests 0 }}ok{{ else }}bad{{ end }}">{{ .FailureRateText }}</div></div>
   </section>
+  {{ end }}
 
-  <h2>Latency</h2>
-  <section class="card bars" aria-label="Latency percentiles">
-    <div class="bar-row"><span>p50</span><div class="track"><div class="fill" style="--v: {{ .LatencyP50Millis }}"></div></div><strong>{{ .LatencyP50 }}</strong></div>
-    <div class="bar-row"><span>p95</span><div class="track"><div class="fill" style="--v: {{ .LatencyP95Millis }}"></div></div><strong>{{ .LatencyP95 }}</strong></div>
-    <div class="bar-row"><span>p99</span><div class="track"><div class="fill" style="--v: {{ .LatencyP99Millis }}"></div></div><strong>{{ .LatencyP99 }}</strong></div>
-    <div class="muted">Bar scale uses milliseconds as percentage width and caps visually at 100ms.</div>
-  </section>
+  <h2>Targets</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Name</th><th>URL</th></tr></thead>
+      <tbody>
+        {{ range .Targets }}
+        <tr><td class="target">{{ .Name }}</td><td><code>{{ .URL }}</code></td></tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
 
-  <h2>Run details</h2>
-  <table>
-    <tr><th>Elapsed</th><td>{{ .Elapsed }}</td></tr>
-    <tr><th>Requests</th><td>{{ .TotalRequests }} total, {{ .SuccessRequests }} success, {{ .FailedRequests }} failed</td></tr>
-    <tr><th>Records</th><td>{{ .TotalRecords }}</td></tr>
-    <tr><th>Request bytes</th><td>{{ .TotalBytes }}</td></tr>
-    <tr><th>Request MiB/sec</th><td>{{ .MiBPerSecond }}</td></tr>
-    <tr><th>Clients</th><td>{{ .Config.Clients }}</td></tr>
-    <tr><th>Records/request</th><td>{{ .Config.Records }}</td></tr>
-    <tr><th>Payload bytes/record</th><td>{{ .Config.PayloadBytes }}</td></tr>
-    <tr><th>Configured duration</th><td>{{ .Config.Duration }}</td></tr>
-    <tr><th>Request timeout</th><td>{{ .Config.Timeout }}</td></tr>
-    <tr><th>Latency samples</th><td>{{ .LatencySamples }}</td></tr>
-  </table>
+  {{ if gt (len .Targets) 1 }}
+  <h2>Scenario winners</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Scenario</th><th>Winner</th><th>Best records/sec</th></tr></thead>
+      <tbody>
+        {{ range .Comparisons }}
+        <tr><td class="scenario">{{ .Scenario }}</td><td class="target">{{ .Winner }}</td><td>{{ .BestRecordsPerSecondText }}</td></tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+  {{ end }}
+
+  <h2>All results</h2>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Target</th>
+          <th>Scenario</th>
+          <th>Records/sec</th>
+          <th>Requests/sec</th>
+          <th>p50</th>
+          <th>p95</th>
+          <th>p99</th>
+          <th>Failure rate</th>
+          <th>Success records</th>
+          <th>Requests</th>
+          <th>MiB/sec</th>
+          <th>Elapsed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{ range .Results }}
+        <tr>
+          <td class="target">{{ .TargetName }}</td>
+          <td class="scenario">{{ .Scenario }}</td>
+          <td>{{ .RecordsPerSecondText }}</td>
+          <td>{{ .RequestsPerSecondText }}</td>
+          <td>{{ .LatencyP50Text }}</td>
+          <td>{{ .LatencyP95Text }}</td>
+          <td>{{ .LatencyP99Text }}</td>
+          <td class="{{ if eq .FailedRequests 0 }}ok{{ else }}bad{{ end }}">{{ .FailureRateText }}</td>
+          <td>{{ .SuccessRecords }}</td>
+          <td>{{ .SuccessRequests }} / {{ .TotalRequests }}</td>
+          <td>{{ .MiBPerSecondText }}</td>
+          <td>{{ .Elapsed }}</td>
+        </tr>
+        {{ end }}
+      </tbody>
+    </table>
+  </div>
+
+  <p class="muted">
+    Compression and acks values are benchmark labels. Configure each target process with the desired Kafka producer settings,
+    then pass each configured process as a separate <code>-target name=url</code> for apples-to-apples comparison.
+  </p>
 </main>
 </body>
 </html>

@@ -20,6 +20,15 @@ const (
 	formatBinary
 )
 
+func (f payloadFormat) String() string {
+	switch f {
+	case formatBinary:
+		return "binary"
+	default:
+		return "json"
+	}
+}
+
 func parseContentType(header string) (payloadFormat, bool) {
 	if strings.TrimSpace(header) == "" {
 		return formatJSON, true

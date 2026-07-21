@@ -24,6 +24,7 @@ It is backed by a shared asynchronous `franz-go` producer. HTTP requests remain 
 - bounded admission control
 - health/readiness endpoints
 - OpenTelemetry metrics exported in Prometheus format for Grafana
+- optional `/debug/pprof` profiling endpoints
 - Dockerfile and starter Helm chart
 
 Out of scope for this MVP:
@@ -72,6 +73,12 @@ Metrics:    http://localhost:8080/metrics
 Grafana is provisioned automatically with a Prometheus datasource and the
 `Kafka REST Proxy Go` dashboard. The local login is `admin` / `admin`.
 
+Start the optional Confluent REST Proxy comparison target on `localhost:8082`:
+
+```bash
+docker compose --profile comparison up --build
+```
+
 Produce JSON:
 
 ```bash
@@ -104,6 +111,7 @@ Configuration is environment-driven for the MVP.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HTTP_ADDR` | `:8080` | HTTP listen address |
+| `PPROF_ENABLE` | `false` | Enable `/debug/pprof` on the main HTTP server |
 | `KAFKA_BROKERS` | `localhost:9092` | Comma-separated broker list |
 | `KAFKA_CLIENT_ID` | `kafka-rest-proxy-go` | Kafka client id |
 | `KAFKA_REQUIRED_ACKS` | `all` | `all`, `1`, or `0` |
@@ -137,6 +145,7 @@ Configuration is environment-driven for the MVP.
 | `/healthz` | `GET` | Process health |
 | `/readyz` | `GET` | Kafka reachability check |
 | `/metrics` | `GET` | OpenTelemetry metrics exported in Prometheus format |
+| `/debug/pprof/` | `GET` | Optional pprof index when `PPROF_ENABLE=true` |
 
 ## Design notes
 
@@ -177,3 +186,64 @@ go run ./cmd/bench-produce \
   -payload-bytes 512 \
   -html dist/benchmark-report.html
 ```
+
+Run a compact multi-scenario suite:
+
+```bash
+go run ./cmd/bench-produce \
+  -suite \
+  -url http://localhost:8080 \
+  -topic orders \
+  -duration 5s \
+  -payload-sizes 128,512,1KiB \
+  -records-per-request 1,10,100 \
+  -client-counts 4,16 \
+  -html dist/benchmark-suite.html
+```
+
+Compare this proxy with Confluent REST Proxy:
+
+```bash
+docker compose --profile comparison up --build
+
+go run ./cmd/bench-produce \
+  -suite \
+  -target go=http://localhost:8080 \
+  -target confluent=http://localhost:8082 \
+  -topic orders \
+  -duration 5s \
+  -payload-sizes 128,512,1KiB \
+  -records-per-request 1,10,100 \
+  -client-counts 4,16 \
+  -html dist/benchmark-comparison.html
+```
+
+The full workload matrix can be expressed as:
+
+```bash
+go run ./cmd/bench-produce \
+  -suite \
+  -target go=http://localhost:8080 \
+  -target confluent=http://localhost:8082 \
+  -topic orders \
+  -duration 30s \
+  -payload-sizes 128,512,1KiB,10KiB \
+  -records-per-request 1,10,100,1000 \
+  -client-counts 4,16,64,256 \
+  -html dist/benchmark-comparison-full.html
+```
+
+Compression and acks are server-side producer settings. To compare them
+honestly, run separate proxy instances configured with those settings and pass
+each instance as a separate `-target name=url`. The benchmark also accepts
+`-compression-labels` and `-acks-labels` so externally configured variants can
+be labelled in the HTML report.
+
+Capture live Confluent REST Proxy edge-case behavior for compatibility work:
+
+```bash
+make compose-up-comparison
+make capture-confluent-fixtures
+```
+
+The generated capture report is written under `compatibility/captured/`.

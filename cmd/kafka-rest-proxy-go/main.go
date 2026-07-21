@@ -59,6 +59,7 @@ func run(log *slog.Logger) error {
 		AllowedTopics:   cfg.TopicAllowlist,
 		ProduceTimeout:  cfg.ProduceTimeout,
 		BearerTokens:    cfg.AuthBearerTokens,
+		PprofEnable:     cfg.PprofEnable,
 	}, log)
 
 	srv := &http.Server{

@@ -188,3 +188,36 @@ func TestTopicAllowlist(t *testing.T) {
 		t.Fatalf("wildcard status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestPprofDisabledByDefault(t *testing.T) {
+	h := NewHandler(&fakeProducer{}, nil, Config{
+		MaxRequestBytes: 1024 * 1024,
+		MaxRecords:      10,
+		ProduceTimeout:  time.Second,
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestPprofEnabled(t *testing.T) {
+	h := NewHandler(&fakeProducer{}, nil, Config{
+		MaxRequestBytes: 1024 * 1024,
+		MaxRecords:      10,
+		ProduceTimeout:  time.Second,
+		PprofEnable:     true,
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil)
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}

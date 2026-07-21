@@ -18,6 +18,19 @@ Grafana:    http://localhost:3000
 Grafana is provisioned with a Prometheus datasource and the `Kafka REST Proxy Go`
 dashboard. The local login is `admin` / `admin`.
 
+The same Compose project can also start Confluent REST Proxy as an optional
+comparison target:
+
+```bash
+docker compose --profile comparison up --build
+```
+
+That exposes:
+
+```text
+Confluent REST Proxy: http://localhost:8082
+```
+
 ## Fast local stack
 
 ```bash
@@ -74,6 +87,62 @@ Run the Docker-backed Go integration test:
 
 ```bash
 KAFKA_INTEGRATION=1 go test ./integration -v
+```
+
+## Benchmark suite and comparison reports
+
+Run a compact multi-scenario benchmark against the Go proxy:
+
+```bash
+make bench-suite
+```
+
+The report is written to:
+
+```text
+dist/benchmark-suite.html
+```
+
+Run the Go-vs-Confluent comparison:
+
+```bash
+make compose-up-comparison
+make bench-compare
+```
+
+The comparison report is written to:
+
+```text
+dist/benchmark-comparison.html
+```
+
+The benchmark suite varies client-side dimensions such as payload size,
+records/request and concurrent clients. Kafka producer compression and acks are
+server-side settings, so compare those by running separate target instances
+configured with the desired settings and passing each as `-target name=url`.
+
+## Capture Confluent compatibility behavior
+
+With the comparison profile running, capture live Confluent REST Proxy edge-case
+responses:
+
+```bash
+make capture-confluent-fixtures
+```
+
+The capture report is written to:
+
+```text
+compatibility/captured/confluent-producer-edge-cases.json
+```
+
+## pprof
+
+Set `PPROF_ENABLE=true` for the Go proxy to expose pprof on the main HTTP
+server:
+
+```text
+http://localhost:8080/debug/pprof/
 ```
 
 To verify the record from Kafka directly in the default stack:
