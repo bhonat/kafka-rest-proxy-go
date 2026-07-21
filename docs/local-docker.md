@@ -59,6 +59,12 @@ scripts/compose-smoke.sh
 
 The script checks `/healthz`, `/readyz`, produces one JSON record, and prints the REST response.
 
+Run the Docker-backed Go integration test:
+
+```bash
+KAFKA_INTEGRATION=1 go test ./integration -v
+```
+
 To verify the record from Kafka directly in the default stack:
 
 ```bash

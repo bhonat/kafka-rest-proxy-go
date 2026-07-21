@@ -159,3 +159,32 @@ func TestBearerAuth(t *testing.T) {
 		t.Fatalf("produce status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestTopicAllowlist(t *testing.T) {
+	h := NewHandler(&fakeProducer{}, nil, Config{
+		MaxRequestBytes: 1024 * 1024,
+		MaxRecords:      10,
+		ProduceTimeout:  time.Second,
+		AllowedTopics:   []string{"orders", "integration-*"},
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/topics/payments", strings.NewReader(`{"records":[{"value":{"ok":true}}]}`))
+	req.Header.Set("Content-Type", mediaKafkaJSONV2)
+	rec := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/topics/integration-123", strings.NewReader(`{"records":[{"value":{"ok":true}}]}`))
+	req.Header.Set("Content-Type", mediaKafkaJSONV2)
+	rec = httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("wildcard status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}

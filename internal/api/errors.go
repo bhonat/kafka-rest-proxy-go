@@ -11,6 +11,7 @@ import (
 const (
 	errorCodeBadRequest         = 400
 	errorCodeUnauthorized       = 401
+	errorCodeForbidden          = 403
 	errorCodeNotAcceptable      = 406
 	errorCodeUnsupportedMedia   = 415
 	errorCodeUnprocessable      = 42201

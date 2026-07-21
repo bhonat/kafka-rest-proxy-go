@@ -90,10 +90,9 @@ The service returns `429` when admission is exhausted.
 
 ## Next implementation tasks
 
-- Add integration tests with testcontainers or a docker-compose Kafka fixture.
+- Expand the seed compatibility fixtures with captured responses from your current Confluent REST Proxy deployment.
 - Add exact Confluent error-code mapping for common broker failures.
-- Add request/response golden tests from real Confluent REST Proxy.
 - Add pprof endpoint behind an opt-in flag.
 - Add optional `confluent-kafka-go` backend for bake-off.
-- Add CI pipeline.
+- Add production Helm objects such as PodDisruptionBudget, ServiceMonitor, and HPA examples.
 - Split Helm templates into standard chart files.

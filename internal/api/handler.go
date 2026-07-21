@@ -18,16 +18,23 @@ import (
 type Config struct {
 	MaxRequestBytes int64
 	MaxRecords      int
+	MaxRecordBytes  int64
+	MaxKeyBytes     int64
+	MaxHeaders      int
+	MaxHeaderBytes  int64
+	AllowedTopics   []string
 	ProduceTimeout  time.Duration
 	BearerTokens    []string
 }
 
 type Handler struct {
-	producer Producer
-	metrics  *metrics.Metrics
-	cfg      Config
-	log      *slog.Logger
-	tokens   map[string]struct{}
+	producer             Producer
+	metrics              *metrics.Metrics
+	cfg                  Config
+	log                  *slog.Logger
+	tokens               map[string]struct{}
+	allowedTopics        map[string]struct{}
+	allowedTopicPrefixes []string
 }
 
 type Producer interface {
@@ -39,6 +46,7 @@ func NewHandler(p Producer, m *metrics.Metrics, cfg Config, log *slog.Logger) *H
 	if log == nil {
 		log = slog.Default()
 	}
+	cfg = cfg.withDefaults()
 	h := &Handler{
 		producer: p,
 		metrics:  m,
@@ -51,6 +59,22 @@ func NewHandler(p Producer, m *metrics.Metrics, cfg Config, log *slog.Logger) *H
 			token = strings.TrimSpace(token)
 			if token != "" {
 				h.tokens[token] = struct{}{}
+			}
+		}
+	}
+	if len(cfg.AllowedTopics) > 0 {
+		h.allowedTopics = make(map[string]struct{}, len(cfg.AllowedTopics))
+		for _, topic := range cfg.AllowedTopics {
+			topic = strings.TrimSpace(topic)
+			if topic != "" {
+				if strings.HasSuffix(topic, "*") {
+					prefix := strings.TrimSuffix(topic, "*")
+					if prefix != "" {
+						h.allowedTopicPrefixes = append(h.allowedTopicPrefixes, prefix)
+					}
+				} else {
+					h.allowedTopics[topic] = struct{}{}
+				}
 			}
 		}
 	}
@@ -122,6 +146,11 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, status, errorCodeBadRequest, "not found")
 		return
 	}
+	if !h.topicAllowed(topic) {
+		status = http.StatusForbidden
+		writeAPIError(w, status, errorCodeForbidden, "topic is not allowed")
+		return
+	}
 
 	if !acceptsResponse(r) {
 		status = http.StatusNotAcceptable
@@ -145,7 +174,7 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := decodeProduceRequest(topic, body, format, h.cfg.MaxRecords)
+	records, err := decodeProduceRequest(topic, body, format, h.cfg.decodeLimits())
 	if err != nil {
 		status = http.StatusUnprocessableEntity
 		var ve validationError
@@ -220,4 +249,54 @@ func (h *Handler) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (h *Handler) topicAllowed(topic string) bool {
+	if len(h.allowedTopics) == 0 && len(h.allowedTopicPrefixes) == 0 {
+		return true
+	}
+	if _, ok := h.allowedTopics[topic]; ok {
+		return true
+	}
+	for _, prefix := range h.allowedTopicPrefixes {
+		if strings.HasPrefix(topic, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg Config) withDefaults() Config {
+	if cfg.MaxRequestBytes <= 0 {
+		cfg.MaxRequestBytes = 8 * 1024 * 1024
+	}
+	if cfg.MaxRecords <= 0 {
+		cfg.MaxRecords = 1000
+	}
+	if cfg.MaxRecordBytes <= 0 {
+		cfg.MaxRecordBytes = 1024 * 1024
+	}
+	if cfg.MaxKeyBytes <= 0 {
+		cfg.MaxKeyBytes = 1024 * 1024
+	}
+	if cfg.MaxHeaders <= 0 {
+		cfg.MaxHeaders = 64
+	}
+	if cfg.MaxHeaderBytes <= 0 {
+		cfg.MaxHeaderBytes = 64 * 1024
+	}
+	if cfg.ProduceTimeout <= 0 {
+		cfg.ProduceTimeout = 30 * time.Second
+	}
+	return cfg
+}
+
+func (cfg Config) decodeLimits() decodeLimits {
+	return decodeLimits{
+		MaxRecords:     cfg.MaxRecords,
+		MaxRecordBytes: cfg.MaxRecordBytes,
+		MaxKeyBytes:    cfg.MaxKeyBytes,
+		MaxHeaders:     cfg.MaxHeaders,
+		MaxHeaderBytes: cfg.MaxHeaderBytes,
+	}
 }

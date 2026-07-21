@@ -9,14 +9,19 @@ import (
 )
 
 type Config struct {
-	HTTPAddr          string
-	ReadHeaderTimeout time.Duration
-	ShutdownTimeout   time.Duration
-	ProduceTimeout    time.Duration
-	RequestMaxBytes   int64
-	RequestMaxRecords int
-	AuthBearerTokens  []string
-	Kafka             KafkaConfig
+	HTTPAddr              string
+	ReadHeaderTimeout     time.Duration
+	ShutdownTimeout       time.Duration
+	ProduceTimeout        time.Duration
+	RequestMaxBytes       int64
+	RequestMaxRecords     int
+	RequestMaxRecordBytes int64
+	RequestMaxKeyBytes    int64
+	RequestMaxHeaders     int
+	RequestMaxHeaderBytes int64
+	TopicAllowlist        []string
+	AuthBearerTokens      []string
+	Kafka                 KafkaConfig
 }
 
 type KafkaConfig struct {
@@ -47,13 +52,18 @@ type SASLConfig struct {
 
 func LoadFromEnv() (Config, error) {
 	cfg := Config{
-		HTTPAddr:          envString("HTTP_ADDR", ":8080"),
-		ReadHeaderTimeout: envDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
-		ShutdownTimeout:   envDuration("SHUTDOWN_TIMEOUT", 20*time.Second),
-		ProduceTimeout:    envDuration("PRODUCE_TIMEOUT", 30*time.Second),
-		RequestMaxBytes:   envInt64("REQUEST_MAX_BYTES", 8*1024*1024),
-		RequestMaxRecords: envInt("REQUEST_MAX_RECORDS", 1000),
-		AuthBearerTokens:  envCSV("AUTH_BEARER_TOKENS"),
+		HTTPAddr:              envString("HTTP_ADDR", ":8080"),
+		ReadHeaderTimeout:     envDuration("HTTP_READ_HEADER_TIMEOUT", 5*time.Second),
+		ShutdownTimeout:       envDuration("SHUTDOWN_TIMEOUT", 20*time.Second),
+		ProduceTimeout:        envDuration("PRODUCE_TIMEOUT", 30*time.Second),
+		RequestMaxBytes:       envInt64("REQUEST_MAX_BYTES", 8*1024*1024),
+		RequestMaxRecords:     envInt("REQUEST_MAX_RECORDS", 1000),
+		RequestMaxRecordBytes: envInt64("REQUEST_MAX_RECORD_BYTES", 1*1024*1024),
+		RequestMaxKeyBytes:    envInt64("REQUEST_MAX_KEY_BYTES", 1024*1024),
+		RequestMaxHeaders:     envInt("REQUEST_MAX_HEADERS", 64),
+		RequestMaxHeaderBytes: envInt64("REQUEST_MAX_HEADER_BYTES", 64*1024),
+		TopicAllowlist:        envCSV("TOPIC_ALLOWLIST"),
+		AuthBearerTokens:      envCSV("AUTH_BEARER_TOKENS"),
 		Kafka: KafkaConfig{
 			Brokers:            envCSVDefault("KAFKA_BROKERS", []string{"localhost:9092"}),
 			ClientID:           envString("KAFKA_CLIENT_ID", "kafka-rest-proxy-go"),
@@ -85,6 +95,18 @@ func LoadFromEnv() (Config, error) {
 	}
 	if cfg.RequestMaxBytes <= 0 {
 		return Config{}, fmt.Errorf("REQUEST_MAX_BYTES must be positive")
+	}
+	if cfg.RequestMaxRecordBytes <= 0 {
+		return Config{}, fmt.Errorf("REQUEST_MAX_RECORD_BYTES must be positive")
+	}
+	if cfg.RequestMaxKeyBytes <= 0 {
+		return Config{}, fmt.Errorf("REQUEST_MAX_KEY_BYTES must be positive")
+	}
+	if cfg.RequestMaxHeaders < 0 {
+		return Config{}, fmt.Errorf("REQUEST_MAX_HEADERS must be zero or positive")
+	}
+	if cfg.RequestMaxHeaderBytes <= 0 {
+		return Config{}, fmt.Errorf("REQUEST_MAX_HEADER_BYTES must be positive")
 	}
 	if cfg.Kafka.MaxBufferedRecords <= 0 {
 		return Config{}, fmt.Errorf("KAFKA_MAX_BUFFERED_RECORDS must be positive")

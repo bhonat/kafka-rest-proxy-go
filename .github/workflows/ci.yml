@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build -o bin/kafka-rest-proxy-go ./cmd/kafka-rest-proxy-go
+      - run: go build -o bin/bench-produce ./cmd/bench-produce
+      - run: docker compose config >/tmp/docker-compose.yml
+      - run: docker compose -f docker-compose.cluster.yml config >/tmp/docker-compose-cluster.yml
+
+  compose-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start local Kafka and REST proxy
+        run: docker compose up --build -d
+      - name: Smoke test Compose stack
+        run: scripts/compose-smoke.sh
+      - name: Run integration tests
+        run: KAFKA_INTEGRATION=1 go test ./integration -v
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down -v --remove-orphans

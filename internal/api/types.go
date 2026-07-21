@@ -36,6 +36,14 @@ type rawHeader struct {
 	Value nullableRaw `json:"value"`
 }
 
+type decodeLimits struct {
+	MaxRecords     int
+	MaxRecordBytes int64
+	MaxKeyBytes    int64
+	MaxHeaders     int
+	MaxHeaderBytes int64
+}
+
 type produceResponse struct {
 	Offsets []produceOffset `json:"offsets"`
 }
@@ -52,7 +60,9 @@ type errorResponse struct {
 	Message   string `json:"message"`
 }
 
-func decodeProduceRequest(topic string, body []byte, format payloadFormat, maxRecords int) ([]producer.Record, error) {
+func decodeProduceRequest(topic string, body []byte, format payloadFormat, limits decodeLimits) ([]producer.Record, error) {
+	limits = limits.withDefaults()
+
 	var req rawProduceRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, validationError{message: "invalid JSON request body: " + err.Error()}
@@ -60,8 +70,8 @@ func decodeProduceRequest(topic string, body []byte, format payloadFormat, maxRe
 	if req.Records == nil {
 		return nil, validationError{message: "request body must include records"}
 	}
-	if len(req.Records) > maxRecords {
-		return nil, validationError{message: fmt.Sprintf("too many records: got %d, limit %d", len(req.Records), maxRecords)}
+	if len(req.Records) > limits.MaxRecords {
+		return nil, validationError{message: fmt.Sprintf("too many records: got %d, limit %d", len(req.Records), limits.MaxRecords)}
 	}
 
 	records := make([]producer.Record, 0, len(req.Records))
@@ -78,26 +88,37 @@ func decodeProduceRequest(topic string, body []byte, format payloadFormat, maxRe
 		if err != nil {
 			return nil, validationError{message: fmt.Sprintf("records[%d].value: %v", i, err)}
 		}
-		headers, err := decodeHeaders(rr.Headers, format)
+		headers, err := decodeHeaders(rr.Headers, format, limits)
 		if err != nil {
 			return nil, validationError{message: fmt.Sprintf("records[%d].headers: %v", i, err)}
 		}
+		if int64(len(key)) > limits.MaxKeyBytes {
+			return nil, validationError{message: fmt.Sprintf("records[%d].key exceeds configured size limit", i)}
+		}
 
-		records = append(records, producer.Record{
+		record := producer.Record{
 			Topic:     topic,
 			Key:       key,
 			Value:     value,
 			Headers:   headers,
 			Partition: rr.Partition,
-		})
+		}
+		if record.SizeBytes() > limits.MaxRecordBytes {
+			return nil, validationError{message: fmt.Sprintf("records[%d] exceeds configured record size limit", i)}
+		}
+
+		records = append(records, record)
 	}
 
 	return records, nil
 }
 
-func decodeHeaders(headers []rawHeader, format payloadFormat) ([]producer.Header, error) {
+func decodeHeaders(headers []rawHeader, format payloadFormat, limits decodeLimits) ([]producer.Header, error) {
 	if len(headers) == 0 {
 		return nil, nil
+	}
+	if len(headers) > limits.MaxHeaders {
+		return nil, fmt.Errorf("too many headers: got %d, limit %d", len(headers), limits.MaxHeaders)
 	}
 
 	out := make([]producer.Header, 0, len(headers))
@@ -112,9 +133,31 @@ func decodeHeaders(headers []rawHeader, format payloadFormat) ([]producer.Header
 		if err != nil {
 			return nil, fmt.Errorf("headers[%d].value: %w", i, err)
 		}
+		if int64(len(h.Key)+len(v)) > limits.MaxHeaderBytes {
+			return nil, fmt.Errorf("headers[%d] exceeds configured size limit", i)
+		}
 		out = append(out, producer.Header{Key: h.Key, Value: v})
 	}
 	return out, nil
+}
+
+func (l decodeLimits) withDefaults() decodeLimits {
+	if l.MaxRecords <= 0 {
+		l.MaxRecords = 1000
+	}
+	if l.MaxRecordBytes <= 0 {
+		l.MaxRecordBytes = 1024 * 1024
+	}
+	if l.MaxKeyBytes <= 0 {
+		l.MaxKeyBytes = 1024 * 1024
+	}
+	if l.MaxHeaders <= 0 {
+		l.MaxHeaders = 64
+	}
+	if l.MaxHeaderBytes <= 0 {
+		l.MaxHeaderBytes = 64 * 1024
+	}
+	return l
 }
 
 func decodeNullableValue(v nullableRaw, format payloadFormat) ([]byte, error) {

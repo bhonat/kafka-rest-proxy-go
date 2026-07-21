@@ -105,7 +105,12 @@ Configuration is environment-driven for the MVP.
 | `KAFKA_MAX_BUFFERED_BYTES` | `134217728` | franz-go buffered byte cap |
 | `REQUEST_MAX_BYTES` | `8388608` | Max HTTP request body bytes |
 | `REQUEST_MAX_RECORDS` | `1000` | Max records per HTTP request |
+| `REQUEST_MAX_RECORD_BYTES` | `1048576` | Max decoded Kafka record bytes |
+| `REQUEST_MAX_KEY_BYTES` | `1048576` | Max decoded Kafka key bytes |
+| `REQUEST_MAX_HEADERS` | `64` | Max Kafka headers per record |
+| `REQUEST_MAX_HEADER_BYTES` | `65536` | Max bytes per decoded Kafka header |
 | `PRODUCE_TIMEOUT` | `30s` | HTTP wait timeout for Kafka callbacks |
+| `TOPIC_ALLOWLIST` | empty | Optional comma-separated allowed topics; supports prefix wildcards like `integration-*` |
 | `AUTH_BEARER_TOKENS` | empty | Optional comma-separated bearer tokens |
 | `KAFKA_TLS_ENABLE` | `false` | Enable TLS to brokers |
 | `KAFKA_TLS_INSECURE_SKIP_VERIFY` | `false` | Skip broker cert verification |
@@ -145,4 +150,18 @@ go test ./...
 ```bash
 make build
 docker build -t kafka-rest-proxy-go:dev .
+```
+
+## Benchmark client
+
+With the Compose stack running:
+
+```bash
+go run ./cmd/bench-produce \
+  -url http://localhost:8080 \
+  -topic orders \
+  -duration 30s \
+  -clients 32 \
+  -records 10 \
+  -payload-bytes 512
 ```

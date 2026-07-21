@@ -1,0 +1,43 @@
+{
+  "name": "json-basic",
+  "request": {
+    "method": "POST",
+    "path": "/topics/orders",
+    "headers": {
+      "Content-Type": "application/vnd.kafka.json.v2+json",
+      "Accept": "application/vnd.kafka.v2+json"
+    },
+    "body": {
+      "records": [
+        {
+          "key": "customer-123",
+          "value": {
+            "order_id": "order-456",
+            "amount": 42
+          },
+          "partition": 2
+        }
+      ]
+    }
+  },
+  "producer_results": [
+    {
+      "partition": 2,
+      "offset": 91823
+    }
+  ],
+  "expect": {
+    "status": 200,
+    "content_type": "application/vnd.kafka.v2+json",
+    "body": {
+      "offsets": [
+        {
+          "partition": 2,
+          "offset": 91823,
+          "error_code": null,
+          "error": null
+        }
+      ]
+    }
+  }
+}

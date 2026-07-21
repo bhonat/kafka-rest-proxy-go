@@ -1,0 +1,22 @@
+{
+  "name": "unsupported-media-type",
+  "request": {
+    "method": "POST",
+    "path": "/topics/orders",
+    "headers": {
+      "Content-Type": "text/plain",
+      "Accept": "application/vnd.kafka.v2+json"
+    },
+    "body": {
+      "records": []
+    }
+  },
+  "expect": {
+    "status": 415,
+    "content_type": "application/vnd.kafka.v2+json",
+    "body": {
+      "error_code": 415,
+      "message": "unsupported Content-Type"
+    }
+  }
+}

@@ -42,6 +42,11 @@ func run(log *slog.Logger) error {
 	handler := api.NewHandler(prod, m, api.Config{
 		MaxRequestBytes: cfg.RequestMaxBytes,
 		MaxRecords:      cfg.RequestMaxRecords,
+		MaxRecordBytes:  cfg.RequestMaxRecordBytes,
+		MaxKeyBytes:     cfg.RequestMaxKeyBytes,
+		MaxHeaders:      cfg.RequestMaxHeaders,
+		MaxHeaderBytes:  cfg.RequestMaxHeaderBytes,
+		AllowedTopics:   cfg.TopicAllowlist,
 		ProduceTimeout:  cfg.ProduceTimeout,
 		BearerTokens:    cfg.AuthBearerTokens,
 	}, log)
