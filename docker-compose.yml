@@ -75,5 +75,33 @@ services:
       TOPIC_ALLOWLIST: orders,binary-events,integration-*
       PRODUCE_TIMEOUT: 30s
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: kafka-rest-proxy-go-prometheus
+    depends_on:
+      - kafka-rest-proxy-go
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: kafka-rest-proxy-go-grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+
 volumes:
   kafka-data:
+  grafana-data:

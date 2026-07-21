@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Kafka REST Proxy Go
+    orgId: 1
+    folder: Kafka REST Proxy Go
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

@@ -23,7 +23,7 @@ It is backed by a shared asynchronous `franz-go` producer. HTTP requests remain 
 - async `franz-go` `TryProduce` callbacks
 - bounded admission control
 - health/readiness endpoints
-- Prometheus-compatible metrics endpoint
+- OpenTelemetry metrics exported in Prometheus format for Grafana
 - Dockerfile and starter Helm chart
 
 Out of scope for this MVP:
@@ -60,6 +60,17 @@ Smoke-test the running Compose stack:
 ```bash
 scripts/compose-smoke.sh
 ```
+
+Local observability endpoints:
+
+```text
+Grafana:    http://localhost:3000
+Prometheus: http://localhost:9090
+Metrics:    http://localhost:8080/metrics
+```
+
+Grafana is provisioned automatically with a Prometheus datasource and the
+`Kafka REST Proxy Go` dashboard. The local login is `admin` / `admin`.
 
 Produce JSON:
 
@@ -125,7 +136,7 @@ Configuration is environment-driven for the MVP.
 | `/topics/{topic}` | `POST` | Produce records |
 | `/healthz` | `GET` | Process health |
 | `/readyz` | `GET` | Kafka reachability check |
-| `/metrics` | `GET` | Prometheus-compatible metrics |
+| `/metrics` | `GET` | OpenTelemetry metrics exported in Prometheus format |
 
 ## Design notes
 

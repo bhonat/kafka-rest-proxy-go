@@ -35,9 +35,19 @@ func run(log *slog.Logger) error {
 	}
 	defer prod.Close()
 
-	m := metrics.New()
+	m, err := metrics.New()
+	if err != nil {
+		return err
+	}
 	m.SetAdmissionSnapshot(prod.AdmissionSnapshot)
 	m.SetBufferedSnapshot(prod.BufferedSnapshot)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer cancel()
+		if err := m.Shutdown(ctx); err != nil {
+			log.Warn("shutdown metrics provider", "error", err)
+		}
+	}()
 
 	handler := api.NewHandler(prod, m, api.Config{
 		MaxRequestBytes: cfg.RequestMaxBytes,

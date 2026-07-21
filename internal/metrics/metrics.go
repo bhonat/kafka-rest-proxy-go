@@ -1,31 +1,180 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/attribute"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
 )
 
 type Metrics struct {
-	requestsTotal       atomic.Int64
-	requests2xx         atomic.Int64
-	requests4xx         atomic.Int64
-	requests5xx         atomic.Int64
-	recordsAccepted     atomic.Int64
-	recordsProduced     atomic.Int64
-	recordsFailed       atomic.Int64
-	requestBytesTotal   atomic.Int64
-	produceLatencyNanos atomic.Int64
-	produceLatencyCount atomic.Int64
+	provider *sdkmetric.MeterProvider
+	handler  http.Handler
+
+	requests        metric.Int64Counter
+	recordsAccepted metric.Int64Counter
+	recordsProduced metric.Int64Counter
+	recordsFailed   metric.Int64Counter
+	requestBytes    metric.Int64Counter
+	produceLatency  metric.Float64Histogram
+
 	outstandingRequests atomic.Int64
 	admissionSnapshot   func() (usedRecords, maxRecords, usedBytes, maxBytes int64)
 	bufferedSnapshot    func() (records, bytes int64)
 }
 
-func New() *Metrics {
-	return &Metrics{}
+func New() (*Metrics, error) {
+	registry := prometheus.NewRegistry()
+	exporter, err := otelprom.New(otelprom.WithRegisterer(registry))
+	if err != nil {
+		return nil, err
+	}
+
+	provider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithResource(resource.NewSchemaless(
+			attribute.String("service.name", "kafka-rest-proxy-go"),
+		)),
+		sdkmetric.WithReader(exporter),
+		sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: "kafka_rest_produce_latency"},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+				Boundaries: []float64{
+					0.001,
+					0.0025,
+					0.005,
+					0.01,
+					0.025,
+					0.05,
+					0.1,
+					0.25,
+					0.5,
+					1,
+					2.5,
+					5,
+					10,
+				},
+			}},
+		)),
+	)
+	meter := provider.Meter("github.com/example/kafka-rest-proxy-go/internal/metrics")
+
+	m := &Metrics{
+		provider: provider,
+		handler:  promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
+	}
+
+	if m.requests, err = meter.Int64Counter(
+		"kafka_rest_requests",
+		metric.WithDescription("Total HTTP produce requests."),
+	); err != nil {
+		return nil, err
+	}
+	if m.recordsAccepted, err = meter.Int64Counter(
+		"kafka_rest_records_accepted",
+		metric.WithDescription("Records accepted in successful HTTP requests."),
+	); err != nil {
+		return nil, err
+	}
+	if m.recordsProduced, err = meter.Int64Counter(
+		"kafka_rest_records_produced",
+		metric.WithDescription("Records successfully acknowledged by Kafka."),
+	); err != nil {
+		return nil, err
+	}
+	if m.recordsFailed, err = meter.Int64Counter(
+		"kafka_rest_records_failed",
+		metric.WithDescription("Records failed by Kafka/client callbacks."),
+	); err != nil {
+		return nil, err
+	}
+	if m.requestBytes, err = meter.Int64Counter(
+		"kafka_rest_request_bytes",
+		metric.WithDescription("HTTP request body bytes processed."),
+		metric.WithUnit("By"),
+	); err != nil {
+		return nil, err
+	}
+	if m.produceLatency, err = meter.Float64Histogram(
+		"kafka_rest_produce_latency",
+		metric.WithDescription("End-to-end HTTP produce request latency."),
+		metric.WithUnit("s"),
+	); err != nil {
+		return nil, err
+	}
+
+	if _, err = meter.Int64ObservableGauge(
+		"kafka_rest_outstanding_requests",
+		metric.WithDescription("Currently active HTTP requests."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			o.Observe(m.outstandingRequests.Load())
+			return nil
+		}),
+	); err != nil {
+		return nil, err
+	}
+
+	if _, err = meter.Int64ObservableGauge(
+		"kafka_rest_admission_records",
+		metric.WithDescription("Records reserved by local admission control."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			usedRecords, maxRecords, _, _ := m.admission()
+			o.Observe(usedRecords, metric.WithAttributes(attribute.String("kind", "used")))
+			o.Observe(maxRecords, metric.WithAttributes(attribute.String("kind", "limit")))
+			return nil
+		}),
+	); err != nil {
+		return nil, err
+	}
+
+	if _, err = meter.Int64ObservableGauge(
+		"kafka_rest_admission_bytes",
+		metric.WithDescription("Bytes reserved by local admission control."),
+		metric.WithUnit("By"),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			_, _, usedBytes, maxBytes := m.admission()
+			o.Observe(usedBytes, metric.WithAttributes(attribute.String("kind", "used")))
+			o.Observe(maxBytes, metric.WithAttributes(attribute.String("kind", "limit")))
+			return nil
+		}),
+	); err != nil {
+		return nil, err
+	}
+
+	if _, err = meter.Int64ObservableGauge(
+		"kafka_rest_franz_buffered_records",
+		metric.WithDescription("Records currently buffered by franz-go."),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			records, _ := m.buffered()
+			o.Observe(records)
+			return nil
+		}),
+	); err != nil {
+		return nil, err
+	}
+
+	if _, err = meter.Int64ObservableGauge(
+		"kafka_rest_franz_buffered_bytes",
+		metric.WithDescription("Bytes currently buffered by franz-go."),
+		metric.WithUnit("By"),
+		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
+			_, bytes := m.buffered()
+			o.Observe(bytes)
+			return nil
+		}),
+	); err != nil {
+		return nil, err
+	}
+
+	return m, nil
 }
 
 func (m *Metrics) SetAdmissionSnapshot(fn func() (usedRecords, maxRecords, usedBytes, maxBytes int64)) {
@@ -37,30 +186,22 @@ func (m *Metrics) SetBufferedSnapshot(fn func() (records, bytes int64)) {
 }
 
 func (m *Metrics) ObserveRequest(status int, requestBytes int64, records int, duration time.Duration) {
-	m.requestsTotal.Add(1)
-	m.requestBytesTotal.Add(requestBytes)
-	m.produceLatencyNanos.Add(duration.Nanoseconds())
-	m.produceLatencyCount.Add(1)
-
-	switch {
-	case status >= 500:
-		m.requests5xx.Add(1)
-	case status >= 400:
-		m.requests4xx.Add(1)
-	default:
-		m.requests2xx.Add(1)
-	}
-	if records > 0 && status < 400 {
-		m.recordsAccepted.Add(int64(records))
+	ctx := context.Background()
+	m.requests.Add(ctx, 1, metric.WithAttributes(attribute.String("status_class", statusClass(status))))
+	m.requestBytes.Add(ctx, requestBytes)
+	m.produceLatency.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.String("status_class", statusClass(status))))
+	if records > 0 && status < http.StatusBadRequest {
+		m.recordsAccepted.Add(ctx, int64(records))
 	}
 }
 
 func (m *Metrics) ObserveProduceResult(successes, failures int) {
+	ctx := context.Background()
 	if successes > 0 {
-		m.recordsProduced.Add(int64(successes))
+		m.recordsProduced.Add(ctx, int64(successes))
 	}
 	if failures > 0 {
-		m.recordsFailed.Add(int64(failures))
+		m.recordsFailed.Add(ctx, int64(failures))
 	}
 }
 
@@ -73,41 +214,33 @@ func (m *Metrics) DecOutstanding() {
 }
 
 func (m *Metrics) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-
-		writeMetric(w, "kafka_rest_requests_total", "Total HTTP requests.", m.requestsTotal.Load())
-		writeMetric(w, "kafka_rest_requests_2xx_total", "HTTP requests returning 2xx/3xx.", m.requests2xx.Load())
-		writeMetric(w, "kafka_rest_requests_4xx_total", "HTTP requests returning 4xx.", m.requests4xx.Load())
-		writeMetric(w, "kafka_rest_requests_5xx_total", "HTTP requests returning 5xx.", m.requests5xx.Load())
-		writeMetric(w, "kafka_rest_records_accepted_total", "Records accepted in successful HTTP requests.", m.recordsAccepted.Load())
-		writeMetric(w, "kafka_rest_records_produced_total", "Records successfully acknowledged by Kafka.", m.recordsProduced.Load())
-		writeMetric(w, "kafka_rest_records_failed_total", "Records failed by Kafka/client callbacks.", m.recordsFailed.Load())
-		writeMetric(w, "kafka_rest_request_bytes_total", "HTTP request body bytes processed.", m.requestBytesTotal.Load())
-		writeMetric(w, "kafka_rest_outstanding_requests", "Currently active HTTP requests.", m.outstandingRequests.Load())
-		writeMetric(w, "kafka_rest_produce_latency_seconds_count", "Produce request latency observation count.", m.produceLatencyCount.Load())
-		fmt.Fprintf(w, "# HELP kafka_rest_produce_latency_seconds_sum Sum of produce request latency in seconds.\n")
-		fmt.Fprintf(w, "# TYPE kafka_rest_produce_latency_seconds_sum counter\n")
-		fmt.Fprintf(w, "kafka_rest_produce_latency_seconds_sum %s\n", strconv.FormatFloat(float64(m.produceLatencyNanos.Load())/float64(time.Second), 'f', 9, 64))
-
-		if m.admissionSnapshot != nil {
-			usedRecords, maxRecords, usedBytes, maxBytes := m.admissionSnapshot()
-			writeMetric(w, "kafka_rest_admission_records", "Records reserved by local admission control.", usedRecords)
-			writeMetric(w, "kafka_rest_admission_records_limit", "Record admission capacity.", maxRecords)
-			writeMetric(w, "kafka_rest_admission_bytes", "Bytes reserved by local admission control.", usedBytes)
-			writeMetric(w, "kafka_rest_admission_bytes_limit", "Byte admission capacity.", maxBytes)
-		}
-
-		if m.bufferedSnapshot != nil {
-			records, bytes := m.bufferedSnapshot()
-			writeMetric(w, "kafka_rest_franz_buffered_records", "Records currently buffered by franz-go.", records)
-			writeMetric(w, "kafka_rest_franz_buffered_bytes", "Bytes currently buffered by franz-go.", bytes)
-		}
-	})
+	return m.handler
 }
 
-func writeMetric(w http.ResponseWriter, name, help string, value int64) {
-	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(w, "# TYPE %s gauge\n", name)
-	fmt.Fprintf(w, "%s %d\n", name, value)
+func (m *Metrics) Shutdown(ctx context.Context) error {
+	if m.provider == nil {
+		return nil
+	}
+	return m.provider.Shutdown(ctx)
+}
+
+func (m *Metrics) admission() (usedRecords, maxRecords, usedBytes, maxBytes int64) {
+	if m.admissionSnapshot == nil {
+		return 0, 0, 0, 0
+	}
+	return m.admissionSnapshot()
+}
+
+func (m *Metrics) buffered() (records, bytes int64) {
+	if m.bufferedSnapshot == nil {
+		return 0, 0
+	}
+	return m.bufferedSnapshot()
+}
+
+func statusClass(status int) string {
+	if status <= 0 {
+		return "unknown"
+	}
+	return fmt.Sprintf("%dxx", status/100)
 }

@@ -7,6 +7,17 @@ This project includes two Docker Compose setups:
 
 The REST proxy runs in the same Compose network as Kafka and connects with Docker-internal broker addresses. The host can call the proxy at `localhost:8080`.
 
+The default stack also starts Prometheus and Grafana:
+
+```text
+REST proxy: http://localhost:8080
+Prometheus: http://localhost:9090
+Grafana:    http://localhost:3000
+```
+
+Grafana is provisioned with a Prometheus datasource and the `Kafka REST Proxy Go`
+dashboard. The local login is `admin` / `admin`.
+
 ## Fast local stack
 
 ```bash

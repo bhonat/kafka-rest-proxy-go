@@ -1,4 +1,4 @@
-.PHONY: test test-integration build run tidy docker-build compose-up compose-up-cluster compose-down compose-down-cluster compose-smoke bench-produce bench-html
+.PHONY: test test-integration build run tidy docker-build compose-up compose-up-cluster compose-down compose-down-cluster compose-smoke bench-produce bench-html otel-metrics
 
 test:
 	go test ./...
@@ -40,3 +40,6 @@ bench-produce:
 
 bench-html:
 	go run ./cmd/bench-produce -url http://localhost:8080 -topic orders -duration 30s -clients 32 -records 10 -payload-bytes 512 -html dist/benchmark-report.html
+
+otel-metrics:
+	curl -fsS http://localhost:8080/metrics | sed -n '1,80p'
