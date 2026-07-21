@@ -1,4 +1,4 @@
-.PHONY: test test-integration build run tidy docker-build compose-up compose-up-cluster compose-down compose-down-cluster compose-smoke bench-produce
+.PHONY: test test-integration build run tidy docker-build compose-up compose-up-cluster compose-down compose-down-cluster compose-smoke bench-produce bench-html
 
 test:
 	go test ./...
@@ -37,3 +37,6 @@ compose-smoke:
 
 bench-produce:
 	go run ./cmd/bench-produce -url http://localhost:8080 -topic orders -duration 30s -clients 32 -records 10 -payload-bytes 512
+
+bench-html:
+	go run ./cmd/bench-produce -url http://localhost:8080 -topic orders -duration 30s -clients 32 -records 10 -payload-bytes 512 -html dist/benchmark-report.html

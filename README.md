@@ -163,5 +163,6 @@ go run ./cmd/bench-produce \
   -duration 30s \
   -clients 32 \
   -records 10 \
-  -payload-bytes 512
+  -payload-bytes 512 \
+  -html dist/benchmark-report.html
 ```
