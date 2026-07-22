@@ -121,6 +121,10 @@ records/request and concurrent clients. Kafka producer compression and acks are
 server-side settings, so compare those by running separate target instances
 configured with the desired settings and passing each as `-target name=url`.
 
+Use `-format binary` for a single binary-media benchmark, or
+`-formats json,binary` in suite mode. Confluent's binary media type still uses a
+JSON request envelope, but each record `key` and `value` is base64 encoded.
+
 ## Capture Confluent compatibility behavior
 
 With the comparison profile running, capture live Confluent REST Proxy edge-case

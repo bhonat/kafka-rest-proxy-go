@@ -187,6 +187,7 @@ go run ./cmd/bench-produce \
   -clients 32 \
   -records 10 \
   -payload-bytes 512 \
+  -format json \
   -html dist/benchmark-report.html
 ```
 
@@ -201,6 +202,7 @@ go run ./cmd/bench-produce \
   -payload-sizes 128,512,1KiB \
   -records-per-request 1,10,100 \
   -client-counts 4,16 \
+  -formats json,binary \
   -html dist/benchmark-suite.html
 ```
 
@@ -218,6 +220,7 @@ go run ./cmd/bench-produce \
   -payload-sizes 128,512,1KiB \
   -records-per-request 1,10,100 \
   -client-counts 4,16 \
+  -formats json,binary \
   -html dist/benchmark-comparison.html
 ```
 
@@ -233,8 +236,13 @@ go run ./cmd/bench-produce \
   -payload-sizes 128,512,1KiB,10KiB \
   -records-per-request 1,10,100,1000 \
   -client-counts 4,16,64,256 \
+  -formats json,binary \
   -html dist/benchmark-comparison-full.html
 ```
+
+Use `-format binary` for a single binary-media benchmark, or
+`-formats json,binary` in suite mode. Confluent's binary media type still uses a
+JSON request envelope, but each record `key` and `value` is base64 encoded.
 
 Compression and acks are server-side producer settings. To compare them
 honestly, run separate proxy instances configured with those settings and pass

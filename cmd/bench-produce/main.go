@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,8 +26,8 @@ type produceRequest struct {
 }
 
 type produceRecord struct {
-	Key   *string        `json:"key,omitempty"`
-	Value map[string]any `json:"value"`
+	Key   *string `json:"key,omitempty"`
+	Value any     `json:"value"`
 }
 
 type targetFlags []targetSpec
@@ -40,6 +41,7 @@ type scenarioSpec struct {
 	PayloadBytes      int
 	RecordsPerRequest int
 	Clients           int
+	Format            string
 	Compression       string
 	Acks              string
 }
@@ -79,6 +81,7 @@ type benchResult struct {
 	PayloadBytes      int
 	RecordsPerRequest int
 	Clients           int
+	Format            string
 	Compression       string
 	Acks              string
 	Elapsed           string
@@ -139,11 +142,13 @@ func main() {
 		timeout           = flag.Duration("timeout", 30*time.Second, "per-request timeout")
 		maxSamples        = flag.Int("max-latency-samples", 1_000_000, "max latency samples retained per target/scenario")
 		keyPrefix         = flag.String("key-prefix", "", "optional static key prefix; empty omits keys for partition spreading")
+		format            = flag.String("format", "json", "payload format for single-scenario mode: json or binary")
 		htmlPath          = flag.String("html", "", "optional path for standalone HTML benchmark report")
 		suite             = flag.Bool("suite", false, "run the multi-scenario benchmark suite")
 		payloadSizes      = flag.String("payload-sizes", "128,512,1KB,10KB", "comma-separated payload sizes for suite mode; supports B, KB, KiB, MB, MiB")
 		recordsPerRequest = flag.String("records-per-request", "1,10,100,1000", "comma-separated records/request values for suite mode")
 		clientCounts      = flag.String("client-counts", "4,16,64,256", "comma-separated concurrent client counts for suite mode")
+		formats           = flag.String("formats", "json", "comma-separated payload formats for suite mode: json,binary")
 		compressionLabels = flag.String("compression-labels", "runtime", "comma-separated suite labels for externally configured Kafka compression variants")
 		acksLabels        = flag.String("acks-labels", "runtime", "comma-separated suite labels for externally configured Kafka required-acks variants")
 		compressionLabel  = flag.String("compression-label", "runtime", "single-scenario label for externally configured Kafka compression")
@@ -152,7 +157,7 @@ func main() {
 	flag.Var(&targets, "target", "benchmark target in name=url form; repeat for comparison, for example -target go=http://localhost:8080 -target confluent=http://localhost:8082")
 	flag.Parse()
 
-	opts, err := buildOptions(*baseURL, *confluentURL, targets, *topic, *duration, *requests, *timeout, *maxSamples, *keyPrefix, *htmlPath, *suite, *payloadBytes, *records, *clients, *payloadSizes, *recordsPerRequest, *clientCounts, *compressionLabels, *acksLabels, *compressionLabel, *acksLabel)
+	opts, err := buildOptions(*baseURL, *confluentURL, targets, *topic, *duration, *requests, *timeout, *maxSamples, *keyPrefix, *htmlPath, *suite, *payloadBytes, *records, *clients, *format, *payloadSizes, *recordsPerRequest, *clientCounts, *formats, *compressionLabels, *acksLabels, *compressionLabel, *acksLabel)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -183,7 +188,7 @@ func main() {
 	}
 }
 
-func buildOptions(baseURL, confluentURL string, targets targetFlags, topic string, duration time.Duration, requests int64, timeout time.Duration, maxSamples int, keyPrefix, htmlPath string, suite bool, payloadBytes, records, clients int, payloadSizes, recordsPerRequest, clientCounts, compressionLabels, acksLabels, compressionLabel, acksLabel string) (benchOptions, error) {
+func buildOptions(baseURL, confluentURL string, targets targetFlags, topic string, duration time.Duration, requests int64, timeout time.Duration, maxSamples int, keyPrefix, htmlPath string, suite bool, payloadBytes, records, clients int, format, payloadSizes, recordsPerRequest, clientCounts, formats, compressionLabels, acksLabels, compressionLabel, acksLabel string) (benchOptions, error) {
 	if strings.TrimSpace(topic) == "" {
 		return benchOptions{}, fmt.Errorf("topic must not be empty")
 	}
@@ -224,20 +229,27 @@ func buildOptions(baseURL, confluentURL string, targets targetFlags, topic strin
 		if err != nil {
 			return benchOptions{}, fmt.Errorf("client-counts: %w", err)
 		}
+		formatValues, err := parseFormatList(formats)
+		if err != nil {
+			return benchOptions{}, fmt.Errorf("formats: %w", err)
+		}
 		compressions := parseLabelList(compressionLabels)
 		acksValues := parseLabelList(acksLabels)
 		for _, payload := range payloads {
 			for _, recs := range recordCounts {
 				for _, clientCount := range clientsList {
-					for _, compression := range compressions {
-						for _, acks := range acksValues {
-							scenarios = append(scenarios, scenarioSpec{
-								PayloadBytes:      payload,
-								RecordsPerRequest: recs,
-								Clients:           clientCount,
-								Compression:       compression,
-								Acks:              acks,
-							})
+					for _, format := range formatValues {
+						for _, compression := range compressions {
+							for _, acks := range acksValues {
+								scenarios = append(scenarios, scenarioSpec{
+									PayloadBytes:      payload,
+									RecordsPerRequest: recs,
+									Clients:           clientCount,
+									Format:            format,
+									Compression:       compression,
+									Acks:              acks,
+								})
+							}
 						}
 					}
 				}
@@ -247,10 +259,15 @@ func buildOptions(baseURL, confluentURL string, targets targetFlags, topic strin
 		if clients <= 0 || records <= 0 || payloadBytes < 0 {
 			return benchOptions{}, fmt.Errorf("clients and records must be positive, and payload-bytes must be zero or positive")
 		}
+		formatValue, err := parseFormat(format)
+		if err != nil {
+			return benchOptions{}, err
+		}
 		scenarios = []scenarioSpec{{
 			PayloadBytes:      payloadBytes,
 			RecordsPerRequest: records,
 			Clients:           clients,
+			Format:            formatValue,
 			Compression:       firstLabel(compressionLabel),
 			Acks:              firstLabel(acksLabel),
 		}}
@@ -276,7 +293,7 @@ func buildOptions(baseURL, confluentURL string, targets targetFlags, topic strin
 }
 
 func runScenario(opts benchOptions, target targetSpec, scenario scenarioSpec) benchResult {
-	body, err := buildBody(scenario.RecordsPerRequest, scenario.PayloadBytes, opts.KeyPrefix)
+	body, err := buildBody(scenario.RecordsPerRequest, scenario.PayloadBytes, opts.KeyPrefix, scenario.Format)
 	if err != nil {
 		return failedResult(opts, target, scenario, err)
 	}
@@ -307,7 +324,7 @@ func runScenario(opts benchOptions, target targetSpec, scenario scenarioSpec) be
 					return
 				default:
 				}
-				results <- postOnce(client, target.URL, opts.Topic, body, int64(scenario.RecordsPerRequest), opts.Timeout)
+				results <- postOnce(client, target.URL, opts.Topic, body, int64(scenario.RecordsPerRequest), opts.Timeout, scenario.Format)
 			}
 		}()
 	}
@@ -343,27 +360,36 @@ func failedResult(opts benchOptions, target targetSpec, scenario scenarioSpec, e
 	return summarize(opts, target, scenario, 0, 0, 0, 0, 0, 0, 0, nil, err.Error())
 }
 
-func buildBody(records, payloadBytes int, keyPrefix string) ([]byte, error) {
+func buildBody(records, payloadBytes int, keyPrefix, format string) ([]byte, error) {
 	payload := strings.Repeat("x", payloadBytes)
 	req := produceRequest{Records: make([]produceRecord, records)}
 	for i := 0; i < records; i++ {
 		var key *string
 		if keyPrefix != "" {
 			k := fmt.Sprintf("%s-%d", keyPrefix, i)
+			if format == "binary" {
+				k = base64.StdEncoding.EncodeToString([]byte(k))
+			}
 			key = &k
 		}
-		req.Records[i] = produceRecord{
-			Key: key,
-			Value: map[string]any{
+		var value any
+		if format == "binary" {
+			value = base64.StdEncoding.EncodeToString([]byte(payload))
+		} else {
+			value = map[string]any{
 				"payload": payload,
 				"index":   i,
-			},
+			}
+		}
+		req.Records[i] = produceRecord{
+			Key:   key,
+			Value: value,
 		}
 	}
 	return json.Marshal(req)
 }
 
-func postOnce(client *http.Client, baseURL, topic string, body []byte, records int64, timeout time.Duration) result {
+func postOnce(client *http.Client, baseURL, topic string, body []byte, records int64, timeout time.Duration, format string) result {
 	start := time.Now()
 	u := strings.TrimRight(baseURL, "/") + "/topics/" + url.PathEscape(topic)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -372,7 +398,7 @@ func postOnce(client *http.Client, baseURL, topic string, body []byte, records i
 	if err != nil {
 		return result{err: err, latency: time.Since(start)}
 	}
-	req.Header.Set("Content-Type", "application/vnd.kafka.json.v2+json")
+	req.Header.Set("Content-Type", contentTypeForFormat(format))
 	req.Header.Set("Accept", "application/vnd.kafka.v2+json")
 
 	resp, err := client.Do(req)
@@ -417,6 +443,7 @@ func summarize(opts benchOptions, target targetSpec, scenario scenarioSpec, elap
 		PayloadBytes:      scenario.PayloadBytes,
 		RecordsPerRequest: scenario.RecordsPerRequest,
 		Clients:           scenario.Clients,
+		Format:            scenario.Format,
 		Compression:       scenario.Compression,
 		Acks:              scenario.Acks,
 		Elapsed:           elapsed.Round(time.Millisecond).String(),
@@ -599,6 +626,40 @@ func parseLabelList(v string) []string {
 	return parts
 }
 
+func parseFormatList(v string) ([]string, error) {
+	parts := splitCSV(v)
+	if len(parts) == 0 {
+		return []string{"json"}, nil
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		format, err := parseFormat(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, format)
+	}
+	return out, nil
+}
+
+func parseFormat(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "json":
+		return "json", nil
+	case "binary", "bin":
+		return "binary", nil
+	default:
+		return "", fmt.Errorf("format must be json or binary, got %q", v)
+	}
+}
+
+func contentTypeForFormat(format string) string {
+	if format == "binary" {
+		return "application/vnd.kafka.binary.v2+json"
+	}
+	return "application/vnd.kafka.json.v2+json"
+}
+
 func firstLabel(v string) string {
 	labels := parseLabelList(v)
 	return labels[0]
@@ -620,7 +681,8 @@ func splitCSV(v string) []string {
 }
 
 func scenarioLabel(s scenarioSpec) string {
-	return fmt.Sprintf("payload=%s records/request=%d clients=%d compression=%s acks=%s",
+	return fmt.Sprintf("format=%s payload=%s records/request=%d clients=%d compression=%s acks=%s",
+		s.Format,
 		formatBytes(s.PayloadBytes),
 		s.RecordsPerRequest,
 		s.Clients,
@@ -826,6 +888,7 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
         <tr>
           <th>Target</th>
           <th>Scenario</th>
+          <th>Format</th>
           <th>Records/sec</th>
           <th>Requests/sec</th>
           <th>p50</th>
@@ -843,6 +906,7 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
         <tr>
           <td class="target">{{ .TargetName }}</td>
           <td class="scenario">{{ .Scenario }}</td>
+          <td>{{ .Format }}</td>
           <td>{{ .RecordsPerSecondText }}</td>
           <td>{{ .RequestsPerSecondText }}</td>
           <td>{{ .LatencyP50Text }}</td>

@@ -42,9 +42,11 @@ func TestBuildOptionsWithTargetsAndSuite(t *testing.T) {
 		512,
 		10,
 		4,
+		"json",
 		"128,512",
 		"1,10",
 		"4,8",
+		"json",
 		"runtime",
 		"runtime",
 		"runtime",
@@ -61,6 +63,60 @@ func TestBuildOptionsWithTargetsAndSuite(t *testing.T) {
 	}
 	if len(opts.Scenarios) != 8 {
 		t.Fatalf("scenarios = %d, want 8", len(opts.Scenarios))
+	}
+}
+
+func TestBuildOptionsWithFormatSuiteDimension(t *testing.T) {
+	opts, err := buildOptions(
+		"http://localhost:8080",
+		"",
+		nil,
+		"orders",
+		time.Second,
+		10,
+		5*time.Second,
+		1000,
+		"",
+		"",
+		true,
+		512,
+		10,
+		4,
+		"json",
+		"128",
+		"10",
+		"4",
+		"json,binary",
+		"runtime",
+		"runtime",
+		"runtime",
+		"runtime",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opts.Scenarios) != 2 {
+		t.Fatalf("scenarios = %d, want 2", len(opts.Scenarios))
+	}
+	if opts.Scenarios[0].Format != "json" || opts.Scenarios[1].Format != "binary" {
+		t.Fatalf("unexpected formats: %#v", opts.Scenarios)
+	}
+}
+
+func TestBuildBinaryBodyUsesBase64StringValue(t *testing.T) {
+	body, err := buildBody(1, 4, "key", "binary")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"records":[{"key":"a2V5LTA=","value":"eHh4eA=="}]}`
+	if string(body) != want {
+		t.Fatalf("body = %s, want %s", body, want)
+	}
+}
+
+func TestParseFormatRejectsUnknown(t *testing.T) {
+	if _, err := parseFormat("avro"); err == nil {
+		t.Fatal("expected error")
 	}
 }
 
