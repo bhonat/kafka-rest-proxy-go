@@ -177,16 +177,52 @@ func decodeNullableValue(v nullableRaw, format payloadFormat) ([]byte, error) {
 		}
 		return decoded, nil
 	default:
-		var compacted bytes.Buffer
-		if err := json.Compact(&compacted, v.Raw); err != nil {
-			return nil, err
-		}
-		return compacted.Bytes(), nil
+		return decodeJSONValue(v.Raw)
 	}
 }
 
+func decodeJSONValue(raw json.RawMessage) ([]byte, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if jsonRawIsCompact(trimmed) {
+		return trimmed, nil
+	}
+	compacted := bytes.NewBuffer(make([]byte, 0, len(trimmed)))
+	if err := json.Compact(compacted, trimmed); err != nil {
+		return nil, err
+	}
+	return compacted.Bytes(), nil
+}
+
+func jsonRawIsCompact(raw []byte) bool {
+	inString := false
+	escaped := false
+	for _, b := range raw {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch b {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch b {
+		case '"':
+			inString = true
+		case ' ', '\n', '\r', '\t':
+			return false
+		}
+	}
+	return true
+}
+
 func isJSONNull(raw json.RawMessage) bool {
-	return string(bytes.TrimSpace(raw)) == "null"
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 func responseFromResults(results []producer.Result) produceResponse {

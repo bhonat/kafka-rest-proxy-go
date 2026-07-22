@@ -5,4 +5,6 @@ coverage.out
 *.test
 *.prof
 *.pprof
+.gocache/
+.gomodcache/
 vendor/

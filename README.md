@@ -159,6 +159,9 @@ The important part of the MVP is preserving Confluent's synchronous HTTP respons
 
 This avoids a per-request synchronous Kafka call while still returning real broker offsets.
 
+The producer accumulator, sender, batching, and memory ownership model are
+documented in [docs/performance-model.md](docs/performance-model.md).
+
 ## Test
 
 ```bash

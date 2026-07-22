@@ -14,6 +14,11 @@ type Header struct {
 }
 
 // Record is the service-internal representation of a Kafka record.
+//
+// Key, Value, and Header.Value are borrowed by producer implementations. Callers
+// must treat these byte slices as immutable after calling Produce. This lets the
+// HTTP layer hand decoded request bytes directly to the Kafka accumulator without
+// a second defensive copy on the hot path.
 type Record struct {
 	Topic     string
 	Key       []byte

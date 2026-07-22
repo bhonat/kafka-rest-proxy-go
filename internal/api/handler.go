@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -175,8 +176,7 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyReader := http.MaxBytesReader(w, r.Body, h.cfg.MaxRequestBytes)
-	body, err := io.ReadAll(bodyReader)
+	body, err := readRequestBody(w, r, h.cfg.MaxRequestBytes)
 	bodyLen = int64(len(body))
 	if err != nil {
 		status = http.StatusRequestEntityTooLarge
@@ -231,6 +231,19 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", mediaKafkaV2)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(responseFromResults(results))
+}
+
+func readRequestBody(w http.ResponseWriter, r *http.Request, maxBytes int64) ([]byte, error) {
+	bodyReader := http.MaxBytesReader(w, r.Body, maxBytes)
+	if r.ContentLength > 0 && r.ContentLength <= maxBytes {
+		var buf bytes.Buffer
+		buf.Grow(int(r.ContentLength))
+		if _, err := buf.ReadFrom(bodyReader); err != nil {
+			return buf.Bytes(), err
+		}
+		return buf.Bytes(), nil
+	}
+	return io.ReadAll(bodyReader)
 }
 
 func topicFromPath(u *url.URL) (string, bool) {

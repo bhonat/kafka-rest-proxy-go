@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/example/kafka-rest-proxy-go/internal/config"
@@ -17,9 +18,10 @@ import (
 )
 
 type Producer struct {
-	client    *kgo.Client
-	admit     *limits.Admission
-	closeFlag atomic.Bool
+	client     *kgo.Client
+	admit      *limits.Admission
+	closeFlag  atomic.Bool
+	recordPool sync.Pool
 }
 
 func New(cfg config.KafkaConfig) (*Producer, error) {
@@ -87,20 +89,12 @@ func (p *Producer) Produce(ctx context.Context, records []producer.Record) ([]pr
 
 	state := newRequestState(len(records), p.admit, int64(len(records)), bytes)
 	for i, r := range records {
-		record := &kgo.Record{
-			Topic:     r.Topic,
-			Key:       cloneBytes(r.Key),
-			Value:     cloneBytes(r.Value),
-			Headers:   toKgoHeaders(r.Headers),
-			Partition: unspecifiedPartition,
-		}
-		if r.Partition != nil {
-			record.Partition = *r.Partition
-		}
+		record := p.acquireRecord(r)
 
 		index := i
 		p.client.TryProduce(ctx, record, func(rec *kgo.Record, err error) {
 			state.complete(index, rec, err)
+			p.releaseRecord(record)
 		})
 	}
 
@@ -132,6 +126,32 @@ func (p *Producer) AdmissionSnapshot() (usedRecords, maxRecords, usedBytes, maxB
 
 func (p *Producer) BufferedSnapshot() (records, bytes int64) {
 	return p.client.BufferedProduceRecords(), p.client.BufferedProduceBytes()
+}
+
+func (p *Producer) acquireRecord(r producer.Record) *kgo.Record {
+	rec, _ := p.recordPool.Get().(*kgo.Record)
+	if rec == nil {
+		rec = &kgo.Record{}
+	}
+	*rec = kgo.Record{
+		Topic:     r.Topic,
+		Key:       r.Key,
+		Value:     r.Value,
+		Headers:   toKgoHeaders(r.Headers),
+		Partition: unspecifiedPartition,
+	}
+	if r.Partition != nil {
+		rec.Partition = *r.Partition
+	}
+	return rec
+}
+
+func (p *Producer) releaseRecord(rec *kgo.Record) {
+	if rec == nil {
+		return
+	}
+	*rec = kgo.Record{}
+	p.recordPool.Put(rec)
 }
 
 type requestState struct {
@@ -189,18 +209,9 @@ func toKgoHeaders(headers []producer.Header) []kgo.RecordHeader {
 	for _, h := range headers {
 		out = append(out, kgo.RecordHeader{
 			Key:   h.Key,
-			Value: cloneBytes(h.Value),
+			Value: h.Value,
 		})
 	}
-	return out
-}
-
-func cloneBytes(in []byte) []byte {
-	if in == nil {
-		return nil
-	}
-	out := make([]byte, len(in))
-	copy(out, in)
 	return out
 }
 
