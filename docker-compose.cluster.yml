@@ -107,7 +107,7 @@ services:
       KAFKA_CLIENT_ID: kafka-rest-proxy-go-cluster
       KAFKA_REQUIRED_ACKS: all
       KAFKA_COMPRESSION: lz4
-      KAFKA_LINGER: 5ms
+      KAFKA_LINGER: 0ms
       KAFKA_DELIVERY_TIMEOUT: 30s
       KAFKA_REQUEST_TIMEOUT: 10s
       KAFKA_BATCH_MAX_BYTES: 1048576

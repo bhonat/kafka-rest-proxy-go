@@ -230,7 +230,7 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", mediaKafkaV2)
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(responseFromResults(results))
+	_, _ = w.Write(appendProduceResponse(nil, results))
 }
 
 func readRequestBody(w http.ResponseWriter, r *http.Request, maxBytes int64) ([]byte, error) {

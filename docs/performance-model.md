@@ -33,10 +33,16 @@ Instead, the service configures franz-go's accumulator directly:
 - `KAFKA_REQUEST_TIMEOUT`
 - `KAFKA_DELIVERY_TIMEOUT`
 
-For high concurrency, the important tuning knob observed so far is linger:
+The most important tuning knob observed so far is linger. Because this proxy
+returns the HTTP response only after Kafka callbacks complete, linger directly
+adds to client-visible latency. The default is therefore `0ms`, which matches
+REST-style request/response traffic better and produced the best local
+records-per-node estimate in the focused comparison.
 
-- `0ms` favors low-latency, lightly loaded requests.
-- `5ms` improves cross-request batching and high-concurrency throughput.
+- `0ms` is the default low-latency profile and should be the first production
+  candidate.
+- `5ms` is a throughput-biased profile only when callers tolerate added
+  response latency and benchmarks prove fewer nodes for the actual workload.
 - `1ms` has not been a good local setting in the current benchmark harness.
 
 ## Memory ownership
@@ -52,6 +58,8 @@ Current memory choices:
 - Pretty JSON is compacted only when needed.
 - Kafka record wrapper objects are reused through a small `sync.Pool`.
 - Key, value, and header bytes are not defensively cloned before `TryProduce`.
+- Produce responses are encoded directly into JSON bytes to avoid per-record
+  pointer allocations in the response hot path.
 
 This goes beyond the earlier MVP path, which copied key/value/header bytes once
 more before entering the Kafka producer. The producer result does not retain
@@ -83,8 +91,9 @@ read with:
 - CPU and allocation profiles
 - configured `acks`, compression, linger, request size, and records/request
 
-The current local high-concurrency result showed Confluent ahead on raw
-records/sec in one spot check, while the Go proxy with `KAFKA_LINGER=5ms`
-returned lower p99 latency and no failures. The next optimization work should
-continue to target allocation pressure and producer enqueue efficiency before
-adding any new application-level queuing.
+The earlier local high-concurrency result showed Confluent ahead when the Go
+proxy was configured with `KAFKA_LINGER=5ms`. A focused spot check with
+`KAFKA_LINGER=0ms` reversed that result for the tested JSON shape: the Go proxy
+produced more records/sec with lower median and tail latency. Future
+optimization work should keep comparing equivalent linger, acks, compression,
+payload, and batch settings before drawing capacity conclusions.

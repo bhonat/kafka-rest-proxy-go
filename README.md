@@ -116,7 +116,7 @@ Configuration is environment-driven for the MVP.
 | `KAFKA_CLIENT_ID` | `kafka-rest-proxy-go` | Kafka client id |
 | `KAFKA_REQUIRED_ACKS` | `all` | `all`, `1`, or `0` |
 | `KAFKA_COMPRESSION` | `lz4` | `none`, `gzip`, `snappy`, `lz4`, `zstd` |
-| `KAFKA_LINGER` | `5ms` | Producer linger duration |
+| `KAFKA_LINGER` | `0ms` | Producer linger duration; use `5ms` only for throughput-biased profiles that can tolerate added response latency |
 | `KAFKA_DELIVERY_TIMEOUT` | `30s` | Record delivery timeout |
 | `KAFKA_REQUEST_TIMEOUT` | `10s` | Broker produce request timeout |
 | `KAFKA_BATCH_MAX_BYTES` | `1048576` | Max Kafka record batch bytes |

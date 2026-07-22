@@ -71,7 +71,7 @@ func LoadFromEnv() (Config, error) {
 			ClientID:           envString("KAFKA_CLIENT_ID", "kafka-rest-proxy-go"),
 			RequiredAcks:       envString("KAFKA_REQUIRED_ACKS", "all"),
 			Compression:        envString("KAFKA_COMPRESSION", "lz4"),
-			Linger:             envDuration("KAFKA_LINGER", 5*time.Millisecond),
+			Linger:             envDuration("KAFKA_LINGER", 0),
 			DeliveryTimeout:    envDuration("KAFKA_DELIVERY_TIMEOUT", 30*time.Second),
 			RequestTimeout:     envDuration("KAFKA_REQUEST_TIMEOUT", 10*time.Second),
 			BatchMaxBytes:      int32(envInt("KAFKA_BATCH_MAX_BYTES", 1_048_576)),

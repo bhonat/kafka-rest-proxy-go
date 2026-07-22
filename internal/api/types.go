@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/example/kafka-rest-proxy-go/internal/producer"
 )
@@ -271,6 +272,43 @@ func responseFromResults(results []producer.Result) produceResponse {
 		}
 	}
 	return resp
+}
+
+func appendProduceResponse(dst []byte, results []producer.Result) []byte {
+	if dst == nil {
+		dst = make([]byte, 0, 64+(len(results)*64))
+	}
+	dst = append(dst, `{"offsets":[`...)
+	for i, r := range results {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = append(dst, '{')
+		if resultFailed(r) {
+			code := confluentKafkaRecordErrorCode
+			if r.ErrorCode != nil {
+				code = *r.ErrorCode
+			}
+			errText := "Kafka produce failed"
+			if r.Err != nil {
+				errText = r.Err.Error()
+			}
+			dst = append(dst, `"partition":null,"offset":null,"error_code":`...)
+			dst = strconv.AppendInt(dst, int64(code), 10)
+			dst = append(dst, `,"error":`...)
+			dst = strconv.AppendQuote(dst, errText)
+		} else {
+			dst = append(dst, `"partition":`...)
+			dst = strconv.AppendInt(dst, int64(r.Partition), 10)
+			dst = append(dst, `,"offset":`...)
+			dst = strconv.AppendInt(dst, r.Offset, 10)
+			dst = append(dst, `,"error_code":null,"error":null`...)
+		}
+		dst = append(dst, '}')
+	}
+	dst = append(dst, `],"key_schema_id":null,"value_schema_id":null}`...)
+	dst = append(dst, '\n')
+	return dst
 }
 
 func countResultStatus(results []producer.Result) (successes, failures int) {
