@@ -1,5 +1,5 @@
 {
-  "name": "kafka-record-error",
+  "name": "record-too-large-error",
   "request": {
     "method": "POST",
     "path": "/topics/orders",
@@ -11,12 +11,7 @@
       "records": [
         {
           "value": {
-            "ok": true
-          }
-        },
-        {
-          "value": {
-            "ok": false
+            "payload": "large"
           }
         }
       ]
@@ -24,12 +19,8 @@
   },
   "producer_results": [
     {
-      "partition": 2,
-      "offset": 91823
-    },
-    {
       "error_code": 50002,
-      "error": "Invalid topics: [bad topic]"
+      "error": "The message is 2097254 bytes when serialized which is larger than 1048576, which is the value of the max.request.size configuration."
     }
   ],
   "expect": {
@@ -38,16 +29,10 @@
     "body": {
       "offsets": [
         {
-          "partition": 2,
-          "offset": 91823,
-          "error_code": null,
-          "error": null
-        },
-        {
           "partition": null,
           "offset": null,
           "error_code": 50002,
-          "error": "Invalid topics: [bad topic]"
+          "error": "The message is 2097254 bytes when serialized which is larger than 1048576, which is the value of the max.request.size configuration."
         }
       ],
       "key_schema_id": null,

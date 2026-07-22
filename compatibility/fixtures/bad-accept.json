@@ -1,0 +1,28 @@
+{
+  "name": "bad-accept",
+  "request": {
+    "method": "POST",
+    "path": "/topics/orders",
+    "headers": {
+      "Content-Type": "application/vnd.kafka.json.v2+json",
+      "Accept": "application/xml"
+    },
+    "body": {
+      "records": [
+        {
+          "value": {
+            "ok": true
+          }
+        }
+      ]
+    }
+  },
+  "expect": {
+    "status": 406,
+    "content_type": "application/vnd.kafka.v2+json",
+    "body": {
+      "error_code": 406,
+      "message": "HTTP 406 Not Acceptable"
+    }
+  }
+}

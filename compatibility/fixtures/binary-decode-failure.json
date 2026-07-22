@@ -1,0 +1,26 @@
+{
+  "name": "binary-decode-failure",
+  "request": {
+    "method": "POST",
+    "path": "/topics/orders",
+    "headers": {
+      "Content-Type": "application/vnd.kafka.binary.v2+json",
+      "Accept": "application/vnd.kafka.v2+json"
+    },
+    "body": {
+      "records": [
+        {
+          "value": "not-base64!"
+        }
+      ]
+    }
+  },
+  "expect": {
+    "status": 400,
+    "content_type": "application/vnd.kafka.v2+json",
+    "body": {
+      "error_code": 400,
+      "message": "Bad Request: data=\"not-base64!\" is not a valid base64 string."
+    }
+  }
+}

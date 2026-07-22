@@ -165,14 +165,14 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 
 	if !acceptsResponse(r) {
 		status = http.StatusNotAcceptable
-		writeAPIError(w, status, errorCodeNotAcceptable, "unsupported Accept header")
+		writeAPIError(w, status, errorCodeNotAcceptable, "HTTP 406 Not Acceptable")
 		return
 	}
 
 	format, ok := parseContentType(r.Header.Get("Content-Type"))
 	if !ok {
 		status = http.StatusUnsupportedMediaType
-		writeAPIError(w, status, errorCodeUnsupportedMedia, "unsupported Content-Type")
+		writeAPIError(w, status, errorCodeUnsupportedMedia, "HTTP 415 Unsupported Media Type")
 		return
 	}
 
@@ -180,7 +180,7 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 	bodyLen = int64(len(body))
 	if err != nil {
 		status = http.StatusRequestEntityTooLarge
-		writeAPIError(w, status, errorCodeUnprocessable, "request body exceeds configured size limit")
+		writeAPIError(w, status, http.StatusRequestEntityTooLarge, "HTTP 413 Payload Too Large")
 		return
 	}
 
@@ -190,13 +190,13 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		h.metrics.ObserveDecode(format.String(), err == nil, time.Since(decodeStart))
 	}
 	if err != nil {
-		status = http.StatusUnprocessableEntity
+		status = http.StatusBadRequest
 		var ve validationError
 		if errors.As(err, &ve) {
-			writeAPIError(w, status, errorCodeUnprocessable, ve.Error())
+			writeAPIError(w, status, errorCodeBadRequest, ve.Error())
 			return
 		}
-		writeAPIError(w, status, errorCodeUnprocessable, err.Error())
+		writeAPIError(w, status, errorCodeBadRequest, err.Error())
 		return
 	}
 	recordCount = len(records)

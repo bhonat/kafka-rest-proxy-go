@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/example/kafka-rest-proxy-go/internal/producer"
@@ -45,7 +46,9 @@ type decodeLimits struct {
 }
 
 type produceResponse struct {
-	Offsets []produceOffset `json:"offsets"`
+	Offsets       []produceOffset `json:"offsets"`
+	KeySchemaID   *int            `json:"key_schema_id"`
+	ValueSchemaID *int            `json:"value_schema_id"`
 }
 
 type produceOffset struct {
@@ -65,7 +68,7 @@ func decodeProduceRequest(topic string, body []byte, format payloadFormat, limit
 
 	var req rawProduceRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, validationError{message: "invalid JSON request body: " + err.Error()}
+		return nil, validationError{message: err.Error()}
 	}
 	if req.Records == nil {
 		return nil, validationError{message: "request body must include records"}
@@ -82,10 +85,18 @@ func decodeProduceRequest(topic string, body []byte, format payloadFormat, limit
 
 		key, err := decodeNullableValue(rr.Key, format)
 		if err != nil {
+			var be binaryDecodeError
+			if errors.As(err, &be) {
+				return nil, validationError{message: be.Error()}
+			}
 			return nil, validationError{message: fmt.Sprintf("records[%d].key: %v", i, err)}
 		}
 		value, err := decodeNullableValue(rr.Value, format)
 		if err != nil {
+			var be binaryDecodeError
+			if errors.As(err, &be) {
+				return nil, validationError{message: be.Error()}
+			}
 			return nil, validationError{message: fmt.Sprintf("records[%d].value: %v", i, err)}
 		}
 		headers, err := decodeHeaders(rr.Headers, format, limits)
@@ -173,12 +184,20 @@ func decodeNullableValue(v nullableRaw, format payloadFormat) ([]byte, error) {
 		}
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return nil, fmt.Errorf("invalid base64: %w", err)
+			return nil, binaryDecodeError{data: encoded}
 		}
 		return decoded, nil
 	default:
 		return decodeJSONValue(v.Raw)
 	}
+}
+
+type binaryDecodeError struct {
+	data string
+}
+
+func (e binaryDecodeError) Error() string {
+	return fmt.Sprintf("Bad Request: data=%q is not a valid base64 string.", e.data)
 }
 
 func decodeJSONValue(raw json.RawMessage) ([]byte, error) {

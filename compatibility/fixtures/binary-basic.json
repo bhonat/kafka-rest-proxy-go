@@ -33,7 +33,9 @@
           "error_code": null,
           "error": null
         }
-      ]
+      ],
+      "key_schema_id": null,
+      "value_schema_id": null
     }
   }
 }

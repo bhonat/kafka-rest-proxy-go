@@ -76,6 +76,9 @@ func TestJSONProduce(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
+	if resp.KeySchemaID != nil || resp.ValueSchemaID != nil {
+		t.Fatalf("schema ids = %#v/%#v, want null/null", resp.KeySchemaID, resp.ValueSchemaID)
+	}
 	if len(resp.Offsets) != 1 || resp.Offsets[0].Offset == nil || *resp.Offsets[0].Offset != 100 {
 		t.Fatalf("unexpected response: %#v", resp)
 	}
@@ -205,6 +208,92 @@ func TestRejectUnsupportedContentType(t *testing.T) {
 
 	if rec.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp errorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Message != "HTTP 415 Unsupported Media Type" {
+		t.Fatalf("message = %q", resp.Message)
+	}
+}
+
+func TestRejectUnsupportedAcceptConfluentShape(t *testing.T) {
+	h := NewHandler(&fakeProducer{}, nil, Config{
+		MaxRequestBytes: 1024 * 1024,
+		MaxRecords:      10,
+		ProduceTimeout:  time.Second,
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/topics/orders", strings.NewReader(`{"records":[{"value":{"ok":true}}]}`))
+	req.Header.Set("Content-Type", mediaKafkaJSONV2)
+	req.Header.Set("Accept", "application/xml")
+	rec := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotAcceptable {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp errorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != 406 || resp.Message != "HTTP 406 Not Acceptable" {
+		t.Fatalf("unexpected error response: %#v", resp)
+	}
+}
+
+func TestMalformedJSONReturnsBadRequest(t *testing.T) {
+	h := NewHandler(&fakeProducer{}, nil, Config{
+		MaxRequestBytes: 1024 * 1024,
+		MaxRecords:      10,
+		ProduceTimeout:  time.Second,
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/topics/orders", strings.NewReader(`{"records":[`))
+	req.Header.Set("Content-Type", mediaKafkaJSONV2)
+	req.Header.Set("Accept", mediaKafkaV2)
+	rec := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp errorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.ErrorCode != 400 {
+		t.Fatalf("error_code = %d, want 400", resp.ErrorCode)
+	}
+}
+
+func TestBinaryDecodeFailureReturnsConfluentShape(t *testing.T) {
+	h := NewHandler(&fakeProducer{}, nil, Config{
+		MaxRequestBytes: 1024 * 1024,
+		MaxRecords:      10,
+		ProduceTimeout:  time.Second,
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/topics/orders", strings.NewReader(`{"records":[{"value":"not-base64!"}]}`))
+	req.Header.Set("Content-Type", mediaKafkaBinaryV2)
+	req.Header.Set("Accept", mediaKafkaV2)
+	rec := httptest.NewRecorder()
+
+	h.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp errorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	want := `Bad Request: data="not-base64!" is not a valid base64 string.`
+	if resp.ErrorCode != 400 || resp.Message != want {
+		t.Fatalf("unexpected error response: %#v", resp)
 	}
 }
 

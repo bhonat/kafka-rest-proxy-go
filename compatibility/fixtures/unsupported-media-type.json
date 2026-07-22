@@ -16,7 +16,7 @@
     "content_type": "application/vnd.kafka.v2+json",
     "body": {
       "error_code": 415,
-      "message": "unsupported Content-Type"
+      "message": "HTTP 415 Unsupported Media Type"
     }
   }
 }

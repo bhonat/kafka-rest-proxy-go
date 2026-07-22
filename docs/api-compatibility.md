@@ -60,7 +60,9 @@ For binary media types, `key` and `value` must be base64 strings or `null`.
       "error_code": null,
       "error": null
     }
-  ]
+  ],
+  "key_schema_id": null,
+  "value_schema_id": null
 }
 ```
 
@@ -85,7 +87,9 @@ Kafka-side record failures are returned in the same `offsets[]` array with HTTP
       "error_code": 50002,
       "error": "Invalid topics: [bad topic]"
     }
-  ]
+  ],
+  "key_schema_id": null,
+  "value_schema_id": null
 }
 ```
 
@@ -96,7 +100,7 @@ record error code `50002`.
 
 The MVP is intentionally close rather than exact:
 
-- Error bodies are Confluent-shaped but not exhaustively code-compatible.
+- Error bodies are aligned for captured JSON/binary cases but not exhaustively code-compatible.
 - Schema-aware media types are not implemented.
 - Header compatibility should be validated against the exact Confluent REST Proxy version in use.
 - Numeric JSON semantics should be validated against client expectations.
