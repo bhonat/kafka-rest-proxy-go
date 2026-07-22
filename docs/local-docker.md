@@ -125,6 +125,11 @@ Use `-format binary` for a single binary-media benchmark, or
 `-formats json,binary` in suite mode. Confluent's binary media type still uses a
 JSON request envelope, but each record `key` and `value` is base64 encoded.
 
+The benchmark HTML report also estimates how many proxy nodes are needed for a
+target workload. By default it estimates `1,000,000` records/sec with `30%`
+headroom. Override that with `-capacity-target-records` and
+`-capacity-headroom`.
+
 ## Capture Confluent compatibility behavior
 
 With the comparison profile running, capture live Confluent REST Proxy edge-case

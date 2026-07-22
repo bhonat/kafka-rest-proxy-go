@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -66,6 +67,12 @@ type benchOptions struct {
 	HTMLPath    string
 	Suite       bool
 	GeneratedAt time.Time
+	Capacity    capacityConfig
+}
+
+type capacityConfig struct {
+	TargetRecordsPerSecond float64
+	Headroom               float64
 }
 
 type benchResult struct {
@@ -95,6 +102,7 @@ type benchResult struct {
 	RecordsPerSecond  float64
 	MiBPerSecond      float64
 	FailureRate       float64
+	CapacityNodes     int
 	LatencyP50        time.Duration
 	LatencyP95        time.Duration
 	LatencyP99        time.Duration
@@ -105,6 +113,7 @@ type benchResult struct {
 	RecordsPerSecondText  string
 	MiBPerSecondText      string
 	FailureRateText       string
+	CapacityNodesText     string
 	LatencyP50Text        string
 	LatencyP95Text        string
 	LatencyP99Text        string
@@ -119,12 +128,23 @@ type benchReport struct {
 	Targets     []targetSpec
 	Results     []benchResult
 	Comparisons []comparisonRow
+	Capacity    capacityReport
+}
+
+type capacityReport struct {
+	Enabled       bool
+	TargetText    string
+	HeadroomText  string
+	EffectiveText string
+	Description   string
 }
 
 type comparisonRow struct {
 	Scenario                 string
 	Winner                   string
 	BestRecordsPerSecondText string
+	NodeWinner               string
+	FewestNodesText          string
 	Results                  []benchResult
 }
 
@@ -153,11 +173,13 @@ func main() {
 		acksLabels        = flag.String("acks-labels", "runtime", "comma-separated suite labels for externally configured Kafka required-acks variants")
 		compressionLabel  = flag.String("compression-label", "runtime", "single-scenario label for externally configured Kafka compression")
 		acksLabel         = flag.String("acks-label", "runtime", "single-scenario label for externally configured Kafka required-acks")
+		capacityTarget    = flag.Float64("capacity-target-records", 1_000_000, "target records/sec for node-count estimates; set 0 to disable")
+		capacityHeadroom  = flag.Float64("capacity-headroom", 0.30, "extra headroom fraction for node-count estimates, for example 0.30 means 30%")
 	)
 	flag.Var(&targets, "target", "benchmark target in name=url form; repeat for comparison, for example -target go=http://localhost:8080 -target confluent=http://localhost:8082")
 	flag.Parse()
 
-	opts, err := buildOptions(*baseURL, *confluentURL, targets, *topic, *duration, *requests, *timeout, *maxSamples, *keyPrefix, *htmlPath, *suite, *payloadBytes, *records, *clients, *format, *payloadSizes, *recordsPerRequest, *clientCounts, *formats, *compressionLabels, *acksLabels, *compressionLabel, *acksLabel)
+	opts, err := buildOptions(*baseURL, *confluentURL, targets, *topic, *duration, *requests, *timeout, *maxSamples, *keyPrefix, *htmlPath, *suite, *payloadBytes, *records, *clients, *format, *payloadSizes, *recordsPerRequest, *clientCounts, *formats, *compressionLabels, *acksLabels, *compressionLabel, *acksLabel, *capacityTarget, *capacityHeadroom)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -167,6 +189,7 @@ func main() {
 		GeneratedAt: opts.GeneratedAt.Format(time.RFC3339),
 		Suite:       opts.Suite,
 		Targets:     opts.Targets,
+		Capacity:    capacityReportFromConfig(opts.Capacity),
 	}
 
 	for _, scenario := range opts.Scenarios {
@@ -188,7 +211,7 @@ func main() {
 	}
 }
 
-func buildOptions(baseURL, confluentURL string, targets targetFlags, topic string, duration time.Duration, requests int64, timeout time.Duration, maxSamples int, keyPrefix, htmlPath string, suite bool, payloadBytes, records, clients int, format, payloadSizes, recordsPerRequest, clientCounts, formats, compressionLabels, acksLabels, compressionLabel, acksLabel string) (benchOptions, error) {
+func buildOptions(baseURL, confluentURL string, targets targetFlags, topic string, duration time.Duration, requests int64, timeout time.Duration, maxSamples int, keyPrefix, htmlPath string, suite bool, payloadBytes, records, clients int, format, payloadSizes, recordsPerRequest, clientCounts, formats, compressionLabels, acksLabels, compressionLabel, acksLabel string, capacityTarget, capacityHeadroom float64) (benchOptions, error) {
 	if strings.TrimSpace(topic) == "" {
 		return benchOptions{}, fmt.Errorf("topic must not be empty")
 	}
@@ -197,6 +220,12 @@ func buildOptions(baseURL, confluentURL string, targets targetFlags, topic strin
 	}
 	if maxSamples <= 0 {
 		return benchOptions{}, fmt.Errorf("max-latency-samples must be positive")
+	}
+	if capacityTarget < 0 {
+		return benchOptions{}, fmt.Errorf("capacity-target-records must be zero or positive")
+	}
+	if capacityHeadroom < 0 {
+		return benchOptions{}, fmt.Errorf("capacity-headroom must be zero or positive")
 	}
 
 	targetsOut := append([]targetSpec(nil), targets...)
@@ -289,6 +318,10 @@ func buildOptions(baseURL, confluentURL string, targets targetFlags, topic strin
 		HTMLPath:    htmlPath,
 		Suite:       suite,
 		GeneratedAt: time.Now(),
+		Capacity: capacityConfig{
+			TargetRecordsPerSecond: capacityTarget,
+			Headroom:               capacityHeadroom,
+		},
 	}, nil
 }
 
@@ -429,6 +462,7 @@ func summarize(opts benchOptions, target targetSpec, scenario scenarioSpec, elap
 	rps := float64(totalRequests) / elapsedSeconds
 	recordsPerSec := float64(successRecords) / elapsedSeconds
 	mibPerSec := float64(requestBytes) / (1024 * 1024) / elapsedSeconds
+	capacityNodes, capacityNodesText := estimateNodes(opts.Capacity, recordsPerSec)
 
 	res := benchResult{
 		GeneratedAt:       opts.GeneratedAt.Format(time.RFC3339),
@@ -457,6 +491,7 @@ func summarize(opts benchOptions, target targetSpec, scenario scenarioSpec, elap
 		RecordsPerSecond:  recordsPerSec,
 		MiBPerSecond:      mibPerSec,
 		FailureRate:       failureRate,
+		CapacityNodes:     capacityNodes,
 		LatencyP50:        p50,
 		LatencyP95:        p95,
 		LatencyP99:        p99,
@@ -467,6 +502,7 @@ func summarize(opts benchOptions, target targetSpec, scenario scenarioSpec, elap
 	res.RecordsPerSecondText = fmt.Sprintf("%.2f", res.RecordsPerSecond)
 	res.MiBPerSecondText = fmt.Sprintf("%.2f", res.MiBPerSecond)
 	res.FailureRateText = fmt.Sprintf("%.2f%%", res.FailureRate)
+	res.CapacityNodesText = capacityNodesText
 	res.LatencyP50Text = p50.Round(time.Millisecond).String()
 	res.LatencyP95Text = p95.Round(time.Millisecond).String()
 	res.LatencyP99Text = p99.Round(time.Millisecond).String()
@@ -491,7 +527,7 @@ func percentile(sorted []time.Duration, p float64) time.Duration {
 }
 
 func printResult(res benchResult) {
-	fmt.Printf("target=%s scenario=%q elapsed=%s requests=%d success=%d failed=%d records=%d records_per_sec=%s requests_per_sec=%s latency_p50=%s latency_p95=%s latency_p99=%s failure_rate=%s\n",
+	fmt.Printf("target=%s scenario=%q elapsed=%s requests=%d success=%d failed=%d records=%d records_per_sec=%s requests_per_sec=%s capacity_nodes=%s latency_p50=%s latency_p95=%s latency_p99=%s failure_rate=%s\n",
 		res.TargetName,
 		res.Scenario,
 		res.Elapsed,
@@ -501,6 +537,7 @@ func printResult(res benchResult) {
 		res.SuccessRecords,
 		res.RecordsPerSecondText,
 		res.RequestsPerSecondText,
+		res.CapacityNodesText,
 		res.LatencyP50Text,
 		res.LatencyP95Text,
 		res.LatencyP99Text,
@@ -508,6 +545,46 @@ func printResult(res benchResult) {
 	)
 	if res.Error != "" {
 		fmt.Printf("target=%s scenario=%q error=%s\n", res.TargetName, res.Scenario, res.Error)
+	}
+}
+
+func estimateNodes(cfg capacityConfig, recordsPerSecond float64) (int, string) {
+	if cfg.TargetRecordsPerSecond <= 0 {
+		return 0, "n/a"
+	}
+	if recordsPerSecond <= 0 {
+		return 0, "∞"
+	}
+	effectiveTarget := cfg.TargetRecordsPerSecond * (1 + cfg.Headroom)
+	nodes := int(math.Ceil(effectiveTarget / recordsPerSecond))
+	if nodes < 1 {
+		nodes = 1
+	}
+	return nodes, strconv.Itoa(nodes)
+}
+
+func capacityReportFromConfig(cfg capacityConfig) capacityReport {
+	if cfg.TargetRecordsPerSecond <= 0 {
+		return capacityReport{}
+	}
+	effectiveTarget := cfg.TargetRecordsPerSecond * (1 + cfg.Headroom)
+	return capacityReport{
+		Enabled:       true,
+		TargetText:    formatRate(cfg.TargetRecordsPerSecond),
+		HeadroomText:  fmt.Sprintf("%.0f%%", cfg.Headroom*100),
+		EffectiveText: formatRate(effectiveTarget),
+		Description:   "Nodes are estimated as ceil(target records/sec × (1 + headroom) ÷ measured records/sec). Treat rows with non-zero failure rate as saturation signals, not reliable sizing points.",
+	}
+}
+
+func formatRate(v float64) string {
+	switch {
+	case v >= 1_000_000:
+		return fmt.Sprintf("%.2fM", v/1_000_000)
+	case v >= 1_000:
+		return fmt.Sprintf("%.2fK", v/1_000)
+	default:
+		return fmt.Sprintf("%.0f", v)
 	}
 }
 
@@ -720,17 +797,29 @@ func buildComparisons(results []benchResult) []comparisonRow {
 			return group[i].TargetName < group[j].TargetName
 		})
 		winner := ""
+		nodeWinner := ""
 		var best float64
+		var fewestNodes int
 		for _, res := range group {
 			if winner == "" || res.RecordsPerSecond > best {
 				winner = res.TargetName
 				best = res.RecordsPerSecond
 			}
+			if res.CapacityNodes > 0 && (nodeWinner == "" || res.CapacityNodes < fewestNodes) {
+				nodeWinner = res.TargetName
+				fewestNodes = res.CapacityNodes
+			}
+		}
+		fewestNodesText := "n/a"
+		if nodeWinner != "" {
+			fewestNodesText = strconv.Itoa(fewestNodes)
 		}
 		rows = append(rows, comparisonRow{
 			Scenario:                 scenario,
 			Winner:                   winner,
 			BestRecordsPerSecondText: fmt.Sprintf("%.2f", best),
+			NodeWinner:               nodeWinner,
+			FewestNodesText:          fewestNodesText,
 			Results:                  group,
 		})
 	}
@@ -845,13 +934,24 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
 <main>
   <h1>Kafka REST Proxy Benchmark Report</h1>
   <div class="muted">Generated {{ .GeneratedAt }}. {{ if .Suite }}Suite mode{{ else }}Single scenario{{ end }} across {{ len .Targets }} target(s).</div>
+  {{ if .Capacity.Enabled }}
+  <p class="muted">
+    Capacity target: <strong>{{ .Capacity.TargetText }} records/sec</strong> with
+    <strong>{{ .Capacity.HeadroomText }}</strong> headroom
+    (effective target {{ .Capacity.EffectiveText }} records/sec). {{ .Capacity.Description }}
+  </p>
+  {{ end }}
 
   {{ with index .Results 0 }}
   <section class="grid" aria-label="First benchmark summary">
     <div class="card"><div class="label">First result records/sec</div><div class="value">{{ .RecordsPerSecondText }}</div></div>
     <div class="card"><div class="label">First result requests/sec</div><div class="value">{{ .RequestsPerSecondText }}</div></div>
     <div class="card"><div class="label">First result p99 latency</div><div class="value">{{ .LatencyP99Text }}</div></div>
+    {{ if $.Capacity.Enabled }}
+    <div class="card"><div class="label">First result estimated nodes</div><div class="value">{{ .CapacityNodesText }}</div></div>
+    {{ else }}
     <div class="card"><div class="label">First result failure rate</div><div class="value {{ if eq .FailedRequests 0 }}ok{{ else }}bad{{ end }}">{{ .FailureRateText }}</div></div>
+    {{ end }}
   </section>
   {{ end }}
 
@@ -871,10 +971,15 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
   <h2>Scenario winners</h2>
   <div class="scroll">
     <table>
-      <thead><tr><th>Scenario</th><th>Winner</th><th>Best records/sec</th></tr></thead>
+      <thead><tr><th>Scenario</th><th>Throughput winner</th><th>Best records/sec</th>{{ if $.Capacity.Enabled }}<th>Fewest-node winner</th><th>Estimated nodes</th>{{ end }}</tr></thead>
       <tbody>
         {{ range .Comparisons }}
-        <tr><td class="scenario">{{ .Scenario }}</td><td class="target">{{ .Winner }}</td><td>{{ .BestRecordsPerSecondText }}</td></tr>
+        <tr>
+          <td class="scenario">{{ .Scenario }}</td>
+          <td class="target">{{ .Winner }}</td>
+          <td>{{ .BestRecordsPerSecondText }}</td>
+          {{ if $.Capacity.Enabled }}<td class="target">{{ .NodeWinner }}</td><td>{{ .FewestNodesText }}</td>{{ end }}
+        </tr>
         {{ end }}
       </tbody>
     </table>
@@ -891,6 +996,7 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
           <th>Format</th>
           <th>Records/sec</th>
           <th>Requests/sec</th>
+          {{ if $.Capacity.Enabled }}<th>Nodes for target</th>{{ end }}
           <th>p50</th>
           <th>p95</th>
           <th>p99</th>
@@ -909,6 +1015,7 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
           <td>{{ .Format }}</td>
           <td>{{ .RecordsPerSecondText }}</td>
           <td>{{ .RequestsPerSecondText }}</td>
+          {{ if $.Capacity.Enabled }}<td>{{ .CapacityNodesText }}</td>{{ end }}
           <td>{{ .LatencyP50Text }}</td>
           <td>{{ .LatencyP95Text }}</td>
           <td>{{ .LatencyP99Text }}</td>

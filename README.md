@@ -237,12 +237,26 @@ go run ./cmd/bench-produce \
   -records-per-request 1,10,100,1000 \
   -client-counts 4,16,64,256 \
   -formats json,binary \
+  -capacity-target-records 1000000 \
+  -capacity-headroom 0.30 \
   -html dist/benchmark-comparison-full.html
 ```
 
 Use `-format binary` for a single binary-media benchmark, or
 `-formats json,binary` in suite mode. Confluent's binary media type still uses a
 JSON request envelope, but each record `key` and `value` is base64 encoded.
+
+Capacity estimates in the HTML report convert each target's measured
+records/sec into an estimated node count:
+
+```text
+ceil(capacity-target-records * (1 + capacity-headroom) / measured-records-sec)
+```
+
+The defaults estimate nodes for `1,000,000` records/sec with `30%` headroom.
+Use node estimates only from rows with near-zero failure rate; rows with
+failures indicate local saturation or instability and should be treated as
+capacity limits, not sizing recommendations.
 
 Compression and acks are server-side producer settings. To compare them
 honestly, run separate proxy instances configured with those settings and pass

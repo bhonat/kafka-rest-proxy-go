@@ -51,6 +51,8 @@ func TestBuildOptionsWithTargetsAndSuite(t *testing.T) {
 		"runtime",
 		"runtime",
 		"runtime",
+		1_000_000,
+		0.30,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +93,8 @@ func TestBuildOptionsWithFormatSuiteDimension(t *testing.T) {
 		"runtime",
 		"runtime",
 		"runtime",
+		1_000_000,
+		0.30,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -120,12 +124,22 @@ func TestParseFormatRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestEstimateNodesAppliesHeadroom(t *testing.T) {
+	nodes, text := estimateNodes(capacityConfig{
+		TargetRecordsPerSecond: 1_000_000,
+		Headroom:               0.30,
+	}, 250_000)
+	if nodes != 6 || text != "6" {
+		t.Fatalf("nodes = %d/%q, want 6", nodes, text)
+	}
+}
+
 func TestBuildComparisonsChoosesHighestRecordsPerSecond(t *testing.T) {
 	rows := buildComparisons([]benchResult{
-		{Scenario: "s1", TargetName: "go", RecordsPerSecond: 10},
-		{Scenario: "s1", TargetName: "confluent", RecordsPerSecond: 8},
-		{Scenario: "s2", TargetName: "go", RecordsPerSecond: 1},
-		{Scenario: "s2", TargetName: "confluent", RecordsPerSecond: 2},
+		{Scenario: "s1", TargetName: "go", RecordsPerSecond: 10, CapacityNodes: 2},
+		{Scenario: "s1", TargetName: "confluent", RecordsPerSecond: 8, CapacityNodes: 3},
+		{Scenario: "s2", TargetName: "go", RecordsPerSecond: 1, CapacityNodes: 10},
+		{Scenario: "s2", TargetName: "confluent", RecordsPerSecond: 2, CapacityNodes: 5},
 	})
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2", len(rows))
@@ -133,7 +147,13 @@ func TestBuildComparisonsChoosesHighestRecordsPerSecond(t *testing.T) {
 	if rows[0].Winner != "go" {
 		t.Fatalf("rows[0].Winner = %q, want go", rows[0].Winner)
 	}
+	if rows[0].NodeWinner != "go" || rows[0].FewestNodesText != "2" {
+		t.Fatalf("rows[0] node winner = %q/%q, want go/2", rows[0].NodeWinner, rows[0].FewestNodesText)
+	}
 	if rows[1].Winner != "confluent" {
 		t.Fatalf("rows[1].Winner = %q, want confluent", rows[1].Winner)
+	}
+	if rows[1].NodeWinner != "confluent" || rows[1].FewestNodesText != "5" {
+		t.Fatalf("rows[1] node winner = %q/%q, want confluent/5", rows[1].NodeWinner, rows[1].FewestNodesText)
 	}
 }
