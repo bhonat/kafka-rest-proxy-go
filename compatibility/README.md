@@ -1,0 +1,112 @@
+# Producer compatibility hardening
+
+This directory contains compatibility assets for the producer-only Confluent REST
+Proxy API implemented by this project.
+
+## Golden fixture tests
+
+The normal test suite runs static fixtures without Kafka:
+
+```bash
+go test ./compatibility
+```
+
+Those tests use a fake producer and validate the Go HTTP compatibility layer.
+
+## Live differential tests
+
+The differential harness sends the same request to the Go proxy and Confluent
+REST Proxy, then compares normalized responses. It is disabled by default so
+normal `go test ./...` does not require Docker or live services.
+
+Start the local comparison stack first:
+
+```bash
+docker compose --profile comparison up --build
+```
+
+Then run:
+
+```bash
+KAFKA_REST_DIFFERENTIAL=1 go test ./compatibility -run TestDifferentialProducerCompatibility -v
+```
+
+Optional environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `KAFKA_REST_GO_URL` | `http://localhost:8080` | Go proxy base URL |
+| `KAFKA_REST_CONFLUENT_URL` | `http://localhost:8082` | Confluent REST Proxy base URL |
+| `KAFKA_REST_DIFFERENTIAL_TOPIC` | `orders` | Existing JSON test topic |
+| `KAFKA_REST_DIFFERENTIAL_BINARY_TOPIC` | `binary-events` | Existing binary test topic |
+| `KAFKA_REST_DIFFERENTIAL_TIMEOUT` | `10s` | Per-request timeout |
+| `KAFKA_REST_DIFFERENTIAL_EDGE` | unset | Set to `1` to also run diagnostic invalid topic/partition cases |
+
+The strict default scenarios are:
+
+- JSON produce success
+- missing record `key`
+- `key:null`
+- `value:null`
+- `Content-Type` with `charset`
+- wildcard `Accept`
+- omitted/default `Accept`
+- larger JSON batch with 10 records
+- binary produce success
+- binary `key:null` / `value:null`
+- binary bad base64
+- malformed JSON
+- unsupported media type
+- unsupported `Accept`
+
+The default diagnostic scenarios are:
+
+- empty `records[]`
+- missing `records`
+- `records:null`
+- missing record `value`
+
+These are diagnostic because local Confluent REST Proxy behavior currently
+differs from the Go proxy:
+
+- Confluent returns `422` for empty, missing, or null `records`; the Go proxy
+  currently returns `200` for empty `records[]` and `400` for missing/null
+  `records`.
+- Confluent treats a record with a missing `value` as a successful null-value
+  produce; the Go proxy currently treats missing `value` as a bad request.
+
+Response normalization intentionally ignores nondeterministic offsets and exact
+human-readable error strings while still comparing status, response shape,
+`error_code`, nullability and content type where Confluent consistently returns
+one.
+
+The optional edge scenarios are diagnostic because local proxy policy, Kafka
+cluster topology, or Confluent REST Proxy version can make them intentionally
+differ. For example, the Go proxy may reject an invalid topic at the allowlist
+layer while Confluent forwards it to Kafka and returns a per-record error.
+
+Diagnostic scenarios currently include:
+
+- invalid topic
+- negative partition
+- partition too large
+- JSON record headers
+- binary record headers
+
+Record headers are diagnostic rather than strict because this project can decode
+and forward Kafka headers, but this harness only compares producer HTTP
+responses. It does not consume records back from Kafka to prove header
+persistence, and Confluent REST Proxy header behavior can vary by API version.
+
+With the local `confluentinc/cp-kafka-rest:7.7.1` comparison container, the
+edge diagnostics currently show these known divergences:
+
+- Invalid topics are rejected by the Go proxy's topic allowlist with `403`,
+  while Confluent forwards to Kafka and returns HTTP `200` with a per-record
+  Kafka error.
+- Negative partitions are treated like normal partitioner selection by the Go
+  proxy/franz-go path, while local Confluent returns HTTP `500`.
+- Very large partition numbers return a per-record Kafka error from the Go
+  proxy; local Confluent may time out before returning a response.
+- Record `headers` are accepted by the Go proxy but rejected by local Confluent
+  with `422` for this v2 producer API path.

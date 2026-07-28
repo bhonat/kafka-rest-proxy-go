@@ -5,6 +5,7 @@ on:
     branches: ["**"]
   pull_request:
     branches: ["**"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,10 +21,14 @@ jobs:
           cache: true
       - run: go test ./...
       - run: go vet ./...
+      - name: Race tests for deterministic packages
+        run: go test -race ./internal/api ./internal/limits ./internal/producer/franz ./compatibility ./cmd/bench-produce ./cmd/soak-produce
       - run: go build -o bin/kafka-rest-proxy-go ./cmd/kafka-rest-proxy-go
       - run: go build -o bin/bench-produce ./cmd/bench-produce
+      - run: go build -o bin/soak-produce ./cmd/soak-produce
       - run: docker compose config >/tmp/docker-compose.yml
       - run: docker compose -f docker-compose.cluster.yml config >/tmp/docker-compose-cluster.yml
+      - run: docker compose -f docker-compose.security.yml config >/tmp/docker-compose-security.yml
 
   compose-integration:
     runs-on: ubuntu-latest
@@ -40,6 +45,90 @@ jobs:
         run: scripts/compose-smoke.sh
       - name: Run integration tests
         run: KAFKA_INTEGRATION=1 go test ./integration -v
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  differential:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start Go and Confluent REST proxies
+        run: docker compose --profile comparison up --build -d
+      - name: Smoke test Go proxy
+        run: scripts/compose-smoke.sh
+      - name: Run live Confluent differential tests
+        run: KAFKA_REST_DIFFERENTIAL=1 go test ./compatibility -run TestDifferentialProducerCompatibility -count=1 -v
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  failure-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start local Kafka and REST proxy
+        run: docker compose up --build -d
+      - name: Run Kafka failure/recovery tests
+        run: KAFKA_INTEGRATION=1 KAFKA_FAILURE_INTEGRATION=1 go test ./integration -run TestComposeKafkaFailureRecovery -count=1 -v
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  security-integration:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start SASL security stack
+        run: docker compose -f docker-compose.security.yml up --build -d
+      - name: Run SASL integration tests
+        run: KAFKA_SECURITY_INTEGRATION=1 go test ./integration -run TestSecurityIntegration -count=1 -v
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.security.yml logs --no-color
+      - name: Stop security stack
+        if: always()
+        run: docker compose -f docker-compose.security.yml down -v --remove-orphans
+
+  soak-smoke:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start local Kafka and REST proxy
+        run: docker compose up --build -d
+      - name: Run short SLO-gated soak
+        run: go run ./cmd/soak-produce -url http://localhost:8080 -topic orders -duration 1m -warmup 5s -clients 16 -records-per-request 10 -payload-bytes 128 -format json -max-failure-rate 0 -min-records-sec 1000 -max-p99 250ms
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --no-color

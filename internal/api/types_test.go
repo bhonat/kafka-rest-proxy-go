@@ -2,10 +2,16 @@ package api
 
 import "testing"
 
-func TestDecodeRejectsMissingValue(t *testing.T) {
-	_, err := decodeProduceRequest("topic", []byte(`{"records":[{"key":"k"}]}`), formatJSON, decodeLimits{MaxRecords: 10})
-	if err == nil {
-		t.Fatal("expected error")
+func TestDecodeMissingValueAsNil(t *testing.T) {
+	records, err := decodeProduceRequest("topic", []byte(`{"records":[{"key":"k"}]}`), formatJSON, decodeLimits{MaxRecords: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d", len(records))
+	}
+	if records[0].Value != nil {
+		t.Fatalf("value = %#v, want nil", records[0].Value)
 	}
 }
 

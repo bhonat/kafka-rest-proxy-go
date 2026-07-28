@@ -179,8 +179,14 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 	body, err := readRequestBody(w, r, h.cfg.MaxRequestBytes)
 	bodyLen = int64(len(body))
 	if err != nil {
-		status = http.StatusRequestEntityTooLarge
-		writeAPIError(w, status, http.StatusRequestEntityTooLarge, "HTTP 413 Payload Too Large")
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			status = http.StatusRequestEntityTooLarge
+			writeAPIError(w, status, http.StatusRequestEntityTooLarge, "HTTP 413 Payload Too Large")
+			return
+		}
+		status = http.StatusBadRequest
+		writeAPIError(w, status, errorCodeBadRequest, "failed to read request body")
 		return
 	}
 
@@ -211,7 +217,9 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			err = contextCanceled
 		}
-		status, code, msg := classifyProduceError(err)
+		var code int
+		var msg string
+		status, code, msg = classifyProduceError(err)
 		if h.metrics != nil {
 			h.metrics.ObserveKafkaCallbackWait(status, produceWait)
 			if errors.Is(err, producer.ErrOverloaded) {

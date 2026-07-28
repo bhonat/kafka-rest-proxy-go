@@ -80,10 +80,6 @@ func decodeProduceRequest(topic string, body []byte, format payloadFormat, limit
 
 	records := make([]producer.Record, 0, len(req.Records))
 	for i, rr := range req.Records {
-		if !rr.Value.Present {
-			return nil, validationError{message: fmt.Sprintf("records[%d].value is required", i)}
-		}
-
 		key, err := decodeNullableValue(rr.Key, format)
 		if err != nil {
 			var be binaryDecodeError
