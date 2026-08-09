@@ -10,9 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/example/kafka-rest-proxy-go/internal/config"
-	"github.com/example/kafka-rest-proxy-go/internal/limits"
-	"github.com/example/kafka-rest-proxy-go/internal/producer"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/config"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/limits"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/producer"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/plain"

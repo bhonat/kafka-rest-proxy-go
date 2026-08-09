@@ -83,7 +83,7 @@ func New() (*Metrics, error) {
 			}},
 		)),
 	)
-	meter := provider.Meter("github.com/example/kafka-rest-proxy-go/internal/metrics")
+	meter := provider.Meter("github.com/bhonat/kafka-rest-proxy-go/internal/metrics")
 
 	m := &Metrics{
 		provider: provider,

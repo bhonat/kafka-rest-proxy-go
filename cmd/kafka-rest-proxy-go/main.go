@@ -9,11 +9,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/example/kafka-rest-proxy-go/internal/api"
-	"github.com/example/kafka-rest-proxy-go/internal/config"
-	"github.com/example/kafka-rest-proxy-go/internal/metrics"
-	franzproducer "github.com/example/kafka-rest-proxy-go/internal/producer/franz"
-	schemaproducer "github.com/example/kafka-rest-proxy-go/internal/schema"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/api"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/config"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/metrics"
+	franzproducer "github.com/bhonat/kafka-rest-proxy-go/internal/producer/franz"
+	schemaproducer "github.com/bhonat/kafka-rest-proxy-go/internal/schema"
 )
 
 var version = "dev"

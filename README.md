@@ -1,5 +1,7 @@
 # kafka-rest-proxy-go
 
+Module: `github.com/bhonat/kafka-rest-proxy-go`
+
 Producer-only Kafka REST gateway in Go. The project implements the Confluent REST Proxy producer surface used by producer clients:
 
 ```http
@@ -259,8 +261,8 @@ make sign-release
 container image should also be scanned or signed:
 
 ```bash
-IMAGE_REF=ghcr.io/example/kafka-rest-proxy-go:0.1.0 make generate-sbom
-IMAGE_REF=ghcr.io/example/kafka-rest-proxy-go:0.1.0 make sign-release
+IMAGE_REF=ghcr.io/bhonat/kafka-rest-proxy-go:0.1.0 make generate-sbom
+IMAGE_REF=ghcr.io/bhonat/kafka-rest-proxy-go:0.1.0 make sign-release
 ```
 
 ## Benchmark client

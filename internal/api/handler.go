@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/kafka-rest-proxy-go/internal/metrics"
-	"github.com/example/kafka-rest-proxy-go/internal/producer"
-	"github.com/example/kafka-rest-proxy-go/internal/ratelimit"
-	schemaproducer "github.com/example/kafka-rest-proxy-go/internal/schema"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/metrics"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/producer"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/ratelimit"
+	schemaproducer "github.com/bhonat/kafka-rest-proxy-go/internal/schema"
 )
 
 type Config struct {

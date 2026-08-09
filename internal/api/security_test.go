@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/kafka-rest-proxy-go/internal/metrics"
-	"github.com/example/kafka-rest-proxy-go/internal/producer"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/metrics"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/producer"
 )
 
 type securityProducer struct {

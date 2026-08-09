@@ -1,10 +1,10 @@
 Source: kafka-rest-proxy-go
 Section: net
 Priority: optional
-Maintainer: KafkaRestProxy-Go contributors <noreply@example.com>
+Maintainer: KafkaRestProxy-Go contributors <maintainers@kafka-rest-proxy-go.invalid>
 Build-Depends: debhelper (>= 12), golang-any
 Standards-Version: 4.6.2
-Homepage: https://example.com/kafka-rest-proxy-go
+Homepage: https://github.com/bhonat/kafka-rest-proxy-go
 
 Package: kafka-rest-proxy-go
 Architecture: any

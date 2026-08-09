@@ -1,4 +1,4 @@
-module github.com/example/kafka-rest-proxy-go
+module github.com/bhonat/kafka-rest-proxy-go
 
 go 1.25.0
 

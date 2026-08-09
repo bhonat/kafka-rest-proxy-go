@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/kafka-rest-proxy-go/internal/config"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/config"
 )
 
 func TestNewTLSConfigLoadsCAFile(t *testing.T) {

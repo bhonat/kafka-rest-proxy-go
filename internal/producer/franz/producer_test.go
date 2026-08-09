@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/example/kafka-rest-proxy-go/internal/limits"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/limits"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 

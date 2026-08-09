@@ -85,8 +85,8 @@ When a release image has been built and pushed, include it in the SBOM and
 signature pass:
 
 ```bash
-IMAGE_REF=ghcr.io/example/kafka-rest-proxy-go:0.1.0 make generate-sbom
-IMAGE_REF=ghcr.io/example/kafka-rest-proxy-go:0.1.0 make sign-release
+IMAGE_REF=ghcr.io/bhonat/kafka-rest-proxy-go:0.1.0 make generate-sbom
+IMAGE_REF=ghcr.io/bhonat/kafka-rest-proxy-go:0.1.0 make sign-release
 ```
 
 ## Rollback

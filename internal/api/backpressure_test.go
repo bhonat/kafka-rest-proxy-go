@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	appmetrics "github.com/example/kafka-rest-proxy-go/internal/metrics"
-	"github.com/example/kafka-rest-proxy-go/internal/producer"
+	appmetrics "github.com/bhonat/kafka-rest-proxy-go/internal/metrics"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/producer"
 )
 
 func TestBackpressureOverloadedProducerReturnsTooManyRequests(t *testing.T) {

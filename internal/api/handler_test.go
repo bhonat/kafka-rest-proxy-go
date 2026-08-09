@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/kafka-rest-proxy-go/internal/producer"
-	schemaproducer "github.com/example/kafka-rest-proxy-go/internal/schema"
+	"github.com/bhonat/kafka-rest-proxy-go/internal/producer"
+	schemaproducer "github.com/bhonat/kafka-rest-proxy-go/internal/schema"
 )
 
 type fakeProducer struct {
