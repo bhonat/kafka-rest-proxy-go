@@ -12,17 +12,13 @@ Do not edit generated module entries by hand.
 | `github.com/cespare/xxhash/v2` | `v2.3.0` | [LICENSE.txt](modules/github.com__cespare__xxhash__v2_at_v2.3.0/LICENSE.txt) |  |
 | `github.com/davecgh/go-spew` | `v1.1.1` | [LICENSE](modules/github.com__davecgh__go-spew_at_v1.1.1/LICENSE) |  |
 | `github.com/dlclark/regexp2` | `v1.11.0` | [LICENSE](modules/github.com__dlclark__regexp2_at_v1.11.0/LICENSE) |  |
-| `github.com/ettle/strcase` | `v0.2.0` | [LICENSE](modules/github.com__ettle__strcase_at_v0.2.0/LICENSE) |  |
 | `github.com/go-logr/logr` | `v1.4.3` | [LICENSE](modules/github.com__go-logr__logr_at_v1.4.3/LICENSE) |  |
 | `github.com/go-logr/stdr` | `v1.2.2` | [LICENSE](modules/github.com__go-logr__stdr_at_v1.2.2/LICENSE) |  |
-| `github.com/go-viper/mapstructure/v2` | `v2.4.0` | [LICENSE](modules/github.com__go-viper__mapstructure__v2_at_v2.4.0/LICENSE) |  |
 | `github.com/golang-jwt/jwt/v5` | `v5.3.1` | [LICENSE](modules/github.com__golang-jwt__jwt__v5_at_v5.3.1/LICENSE) |  |
 | `github.com/golang/protobuf` | `v1.5.0` | [LICENSE](modules/github.com__golang__protobuf_at_v1.5.0/LICENSE) |  |
 | `github.com/golang/snappy` | `v1.0.0` | [LICENSE](modules/github.com__golang__snappy_at_v1.0.0/LICENSE) |  |
 | `github.com/google/go-cmp` | `v0.7.0` | [LICENSE](modules/github.com__google__go-cmp_at_v0.7.0/LICENSE) |  |
-| `github.com/google/gofuzz` | `v1.0.0` | [LICENSE](modules/github.com__google__gofuzz_at_v1.0.0/LICENSE) |  |
 | `github.com/google/uuid` | `v1.6.0` | [LICENSE](modules/github.com__google__uuid_at_v1.6.0/LICENSE) |  |
-| `github.com/hamba/avro/v2` | `v2.31.0` | [LICENCE](modules/github.com__hamba__avro__v2_at_v2.31.0/LICENCE) |  |
 | `github.com/jpillora/backoff` | `v1.0.0` | [LICENSE](modules/github.com__jpillora__backoff_at_v1.0.0/LICENSE) |  |
 | `github.com/json-iterator/go` | `v1.1.12` | [LICENSE](modules/github.com__json-iterator__go_at_v1.1.12/LICENSE) |  |
 | `github.com/julienschmidt/httprouter` | `v1.3.0` | [LICENSE](modules/github.com__julienschmidt__httprouter_at_v1.3.0/LICENSE) |  |
@@ -30,6 +26,7 @@ Do not edit generated module entries by hand.
 | `github.com/kr/pretty` | `v0.3.1` | [License](modules/github.com__kr__pretty_at_v0.3.1/License) |  |
 | `github.com/kr/text` | `v0.2.0` | [License](modules/github.com__kr__text_at_v0.2.0/License) |  |
 | `github.com/kylelemons/godebug` | `v1.1.0` | [LICENSE](modules/github.com__kylelemons__godebug_at_v1.1.0/LICENSE) |  |
+| `github.com/linkedin/goavro/v2` | `v2.15.0` | [LICENSE](modules/github.com__linkedin__goavro__v2_at_v2.15.0/LICENSE) |  |
 | `github.com/modern-go/concurrent` | `v0.0.0-20180306012644-bacd9c7ef1dd` | [LICENSE](modules/github.com__modern-go__concurrent_at_v0.0.0-20180306012644-bacd9c7ef1dd/LICENSE) |  |
 | `github.com/modern-go/reflect2` | `v1.0.2` | [LICENSE](modules/github.com__modern-go__reflect2_at_v1.0.2/LICENSE) |  |
 | `github.com/munnerz/goautoneg` | `v0.0.0-20191010083416-a7dc8b61c822` | [LICENSE](modules/github.com__munnerz__goautoneg_at_v0.0.0-20191010083416-a7dc8b61c822/LICENSE) |  |
@@ -43,7 +40,7 @@ Do not edit generated module entries by hand.
 | `github.com/prometheus/procfs` | `v0.21.1` | [LICENSE](modules/github.com__prometheus__procfs_at_v0.21.1/LICENSE), [NOTICE](modules/github.com__prometheus__procfs_at_v0.21.1/NOTICE) |  |
 | `github.com/rogpeppe/go-internal` | `v1.14.1` | [LICENSE](modules/github.com__rogpeppe__go-internal_at_v1.14.1/LICENSE) |  |
 | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.2` | [LICENSE](modules/github.com__santhosh-tekuri__jsonschema__v6_at_v6.0.2/LICENSE) |  |
-| `github.com/stretchr/objx` | `v0.1.0` | [LICENSE](modules/github.com__stretchr__objx_at_v0.1.0/LICENSE) |  |
+| `github.com/stretchr/objx` | `v0.4.0` | [LICENSE](modules/github.com__stretchr__objx_at_v0.4.0/LICENSE) |  |
 | `github.com/stretchr/testify` | `v1.11.1` | [LICENSE](modules/github.com__stretchr__testify_at_v1.11.1/LICENSE) |  |
 | `github.com/twmb/franz-go` | `v1.21.5` | [LICENSE](modules/github.com__twmb__franz-go_at_v1.21.5/LICENSE) |  |
 | `github.com/twmb/franz-go/pkg/kmsg` | `v1.13.1` | [LICENSE](modules/github.com__twmb__franz-go__pkg__kmsg_at_v1.13.1/LICENSE) |  |

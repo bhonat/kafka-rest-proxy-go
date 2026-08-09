@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/bufbuild/protocompile"
-	"github.com/hamba/avro/v2"
+	"github.com/linkedin/goavro/v2"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -154,17 +154,15 @@ func (e *Encoder) encodeSchemaAware(ctx context.Context, topic string, key bool,
 }
 
 func encodeAvro(schemaText string, raw json.RawMessage) ([]byte, error) {
-	sch, err := avro.Parse(schemaText)
+	codec, err := goavro.NewCodec(schemaText)
 	if err != nil {
 		return nil, err
 	}
-	var native any
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	if err := dec.Decode(&native); err != nil {
+	native, _, err := codec.NativeFromTextual(raw)
+	if err != nil {
 		return nil, err
 	}
-	return avro.Marshal(sch, native)
+	return codec.BinaryFromNative(nil, native)
 }
 
 func encodeJSONSchema(schemaText string, raw json.RawMessage) ([]byte, error) {

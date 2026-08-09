@@ -22,6 +22,9 @@ func TestEncoderAvroAddsConfluentWireFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertWireHeader(t, payload, 1)
+	if got, want := payload[5:], []byte{6, 'a', '-', '1'}; !bytes.Equal(got, want) {
+		t.Fatalf("avro payload = %x, want %x", got, want)
+	}
 	if meta.Type != TypeAvro || meta.SchemaID == nil || *meta.SchemaID != 1 || meta.Subject != "orders-value" {
 		t.Fatalf("metadata = %+v", meta)
 	}
