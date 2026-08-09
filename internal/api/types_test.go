@@ -1,6 +1,9 @@
 package api
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestDecodeMissingValueAsNil(t *testing.T) {
 	records, err := decodeProduceRequest("topic", []byte(`{"records":[{"key":"k"}]}`), formatJSON, decodeLimits{MaxRecords: 10})
@@ -31,6 +34,28 @@ func TestDecodeNullValueAsNil(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsMissingRecordsAsUnprocessable(t *testing.T) {
+	_, err := decodeProduceRequest("topic", []byte(`{}`), formatJSON, decodeLimits{MaxRecords: 10})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var got unprocessableError
+	if !errors.As(err, &got) {
+		t.Fatalf("error = %T %[1]v, want unprocessableError", err)
+	}
+}
+
+func TestDecodeRejectsEmptyRecordsAsUnprocessable(t *testing.T) {
+	_, err := decodeProduceRequest("topic", []byte(`{"records":[]}`), formatJSON, decodeLimits{MaxRecords: 10})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var got unprocessableError
+	if !errors.As(err, &got) {
+		t.Fatalf("error = %T %[1]v, want unprocessableError", err)
+	}
+}
+
 func TestDecodeRejectsOversizedRecord(t *testing.T) {
 	_, err := decodeProduceRequest("topic", []byte(`{"records":[{"value":"abcdef"}]}`), formatJSON, decodeLimits{
 		MaxRecords:     10,
@@ -38,6 +63,40 @@ func TestDecodeRejectsOversizedRecord(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestDecodeRejectsTooManyRecords(t *testing.T) {
+	_, err := decodeProduceRequest("topic", []byte(`{"records":[{"value":1},{"value":2}]}`), formatJSON, decodeLimits{
+		MaxRecords: 1,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestDecodeRejectsNegativePartition(t *testing.T) {
+	_, err := decodeProduceRequest("topic", []byte(`{"records":[{"partition":-1,"value":{"ok":true}}]}`), formatJSON, decodeLimits{
+		MaxRecords: 10,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got, want := err.Error(), "records[0].partition must be non-negative"; got != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+}
+
+func TestDecodeAppliesForcedPartition(t *testing.T) {
+	partition := int32(3)
+	records, err := decodeProduceRequest("topic", []byte(`{"records":[{"partition":9,"value":{"ok":true}}]}`), formatJSON, decodeLimits{
+		MaxRecords: 10,
+	}, &partition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[0].Partition == nil || *records[0].Partition != 3 {
+		t.Fatalf("partition = %v, want forced partition 3", records[0].Partition)
 	}
 }
 

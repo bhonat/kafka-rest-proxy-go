@@ -1,0 +1,20 @@
+{
+  "name": "missing-records",
+  "request": {
+    "method": "POST",
+    "path": "/topics/orders",
+    "headers": {
+      "Content-Type": "application/vnd.kafka.json.v2+json",
+      "Accept": "application/vnd.kafka.v2+json"
+    },
+    "body": {}
+  },
+  "expect": {
+    "status": 422,
+    "content_type": "application/vnd.kafka.v2+json",
+    "body": {
+      "error_code": 422,
+      "message": "request body must include records"
+    }
+  }
+}

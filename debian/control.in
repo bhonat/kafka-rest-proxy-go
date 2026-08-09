@@ -1,0 +1,14 @@
+Source: kafka-rest-proxy-go
+Section: net
+Priority: optional
+Maintainer: KafkaRestProxy-Go contributors <noreply@example.com>
+Build-Depends: debhelper (>= 12), golang-any
+Standards-Version: 4.6.2
+Homepage: https://example.com/kafka-rest-proxy-go
+
+Package: kafka-rest-proxy-go
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Producer-only Confluent-compatible Kafka REST proxy in Go
+ KafkaRestProxy-Go implements the Confluent Kafka REST Proxy v2 producer
+ JSON/binary API surface backed by a shared asynchronous Go Kafka producer.

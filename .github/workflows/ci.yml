@@ -11,13 +11,40 @@ permissions:
   contents: read
 
 jobs:
-  unit:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25.12"
+          cache: true
+      - name: Check formatting
+        run: make fmt-check
+      - name: Validate OpenAPI contract coverage
+        run: make openapi-check
+      - name: Validate generated third-party license bundle
+        run: make licenses-check
+      - name: Coverage
+        run: make coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+      - name: Vulnerability scan
+        run: make govulncheck
+      - name: Static analysis
+        run: make staticcheck
+
+  unit:
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
           cache: true
       - run: go test ./...
       - run: go vet ./...
@@ -27,17 +54,19 @@ jobs:
       - run: go build -o bin/bench-produce ./cmd/bench-produce
       - run: go build -o bin/soak-produce ./cmd/soak-produce
       - run: docker compose config >/tmp/docker-compose.yml
+      - run: docker compose --profile schema-registry config >/tmp/docker-compose-schema-registry.yml
       - run: docker compose -f docker-compose.cluster.yml config >/tmp/docker-compose-cluster.yml
       - run: docker compose -f docker-compose.security.yml config >/tmp/docker-compose-security.yml
 
   compose-integration:
     runs-on: ubuntu-latest
+    needs: unit
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25.12"
           cache: true
       - name: Start local Kafka and REST proxy
         run: docker compose up --build -d
@@ -54,19 +83,41 @@ jobs:
 
   differential:
     runs-on: ubuntu-latest
+    needs: unit
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25.12"
           cache: true
-      - name: Start Go and Confluent REST proxies
-        run: docker compose --profile comparison up --build -d
+      - name: Start Go, Confluent REST Proxy, and Schema Registry
+        run: docker compose --profile comparison --profile schema-registry up --build -d
       - name: Smoke test Go proxy
         run: scripts/compose-smoke.sh
       - name: Run live Confluent differential tests
-        run: KAFKA_REST_DIFFERENTIAL=1 go test ./compatibility -run TestDifferentialProducerCompatibility -count=1 -v
+        run: KAFKA_REST_DIFFERENTIAL=1 KAFKA_REST_DIFFERENTIAL_V3=1 KAFKA_REST_DIFFERENTIAL_SCHEMA=1 go test ./compatibility -run TestDifferentialProducerCompatibility -count=1 -v
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down -v --remove-orphans
+
+  schema-registry-integration:
+    runs-on: ubuntu-latest
+    needs: unit
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache: true
+      - name: Start Schema Registry stack
+        run: docker compose --profile schema-registry up --build -d
+      - name: Run Schema Registry integration tests
+        run: make test-schema-registry-integration
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --no-color
@@ -76,12 +127,13 @@ jobs:
 
   failure-integration:
     runs-on: ubuntu-latest
+    needs: unit
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25.12"
           cache: true
       - name: Start local Kafka and REST proxy
         run: docker compose up --build -d
@@ -94,20 +146,55 @@ jobs:
         if: always()
         run: docker compose down -v --remove-orphans
 
-  security-integration:
-    if: github.event_name == 'workflow_dispatch'
+  cluster-integration:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    needs: unit
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25.12"
+          cache: true
+      - name: Start 3-broker Kafka cluster and REST proxy
+        run: docker compose -f docker-compose.cluster.yml up --build -d
+      - name: Run rolling broker restart test
+        run: KAFKA_CLUSTER_INTEGRATION=1 go test ./integration -run TestClusterRollingBrokerRestart -count=1 -v
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.cluster.yml logs --no-color
+      - name: Stop cluster stack
+        if: always()
+        run: docker compose -f docker-compose.cluster.yml down -v --remove-orphans
+
+  security-integration:
+    runs-on: ubuntu-latest
+    needs: unit
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
           cache: true
       - name: Start SASL security stack
         run: docker compose -f docker-compose.security.yml up --build -d
       - name: Run SASL integration tests
         run: KAFKA_SECURITY_INTEGRATION=1 go test ./integration -run TestSecurityIntegration -count=1 -v
+      - name: Generate local TLS fixtures
+        run: make prepare-security-secrets
+      - name: Start SASL_SSL security stack
+        run: docker compose -f docker-compose.security.yml --profile sasl-ssl up --build -d
+      - name: Run SASL_SSL integration tests
+        run: make test-sasl-ssl-integration
+      - name: Start mTLS security stack
+        run: docker compose -f docker-compose.security.yml --profile mtls up --build -d
+      - name: Run mTLS integration tests
+        run: make test-mtls-integration
+      - name: Start ACL security stack
+        run: docker compose -f docker-compose.security.yml --profile acl up --build -d
+      - name: Run ACL allow/deny integration tests
+        run: make test-acl-integration
       - name: Dump logs on failure
         if: failure()
         run: docker compose -f docker-compose.security.yml logs --no-color
@@ -116,14 +203,14 @@ jobs:
         run: docker compose -f docker-compose.security.yml down -v --remove-orphans
 
   soak-smoke:
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    needs: unit
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.25.12"
           cache: true
       - name: Start local Kafka and REST proxy
         run: docker compose up --build -d

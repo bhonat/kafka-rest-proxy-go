@@ -112,5 +112,331 @@ services:
       TOPIC_ALLOWLIST: orders,binary-events,integration-*
       PRODUCE_TIMEOUT: 3s
 
+  kafka-sasl-ssl:
+    profiles:
+      - sasl-ssl
+    image: confluentinc/cp-kafka:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+    hostname: kafka-sasl-ssl
+    container_name: kafka-rest-proxy-go-kafka-sasl-ssl
+    ports:
+      - "9095:9095"
+    environment:
+      CLUSTER_ID: ${KAFKA_SASL_SSL_CLUSTER_ID:-TUtBRkxLQVJFU1RTU0w}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-sasl-ssl:9093
+      KAFKA_LISTENERS: SASL_SSL://0.0.0.0:29095,CONTROLLER://0.0.0.0:9093,SASL_SSL_HOST://0.0.0.0:9095
+      KAFKA_ADVERTISED_LISTENERS: SASL_SSL://kafka-sasl-ssl:29095,SASL_SSL_HOST://localhost:9095
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,SASL_SSL:SASL_SSL,SASL_SSL_HOST:SASL_SSL
+      KAFKA_INTER_BROKER_LISTENER_NAME: SASL_SSL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      KAFKA_OPTS: -Djava.security.auth.login.config=/etc/kafka/secrets/kafka_server_jaas.conf
+      KAFKA_LISTENER_NAME_SASL_SSL_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret" user_admin="admin-secret" user_proxy="proxy-secret";
+      KAFKA_LISTENER_NAME_SASL_SSL_HOST_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret" user_admin="admin-secret" user_proxy="proxy-secret";
+      KAFKA_SSL_KEYSTORE_FILENAME: broker.keystore.p12
+      KAFKA_SSL_KEY_CREDENTIALS: broker_sslkey_creds
+      KAFKA_SSL_KEYSTORE_CREDENTIALS: broker_keystore_creds
+      KAFKA_SSL_TRUSTSTORE_FILENAME: broker.truststore.p12
+      KAFKA_SSL_TRUSTSTORE_CREDENTIALS: broker_truststore_creds
+      KAFKA_SSL_KEYSTORE_LOCATION: /etc/kafka/secrets/broker.keystore.p12
+      KAFKA_SSL_KEYSTORE_PASSWORD: test-secret
+      KAFKA_SSL_KEYSTORE_TYPE: PKCS12
+      KAFKA_SSL_TRUSTSTORE_LOCATION: /etc/kafka/secrets/broker.truststore.p12
+      KAFKA_SSL_TRUSTSTORE_PASSWORD: test-secret
+      KAFKA_SSL_TRUSTSTORE_TYPE: PKCS12
+      KAFKA_SSL_CLIENT_AUTH: none
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 12
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          cat >/tmp/security-client.properties <<'EOF'
+          security.protocol=SASL_SSL
+          sasl.mechanism=PLAIN
+          sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret";
+          ssl.truststore.location=/etc/kafka/secrets/broker.truststore.p12
+          ssl.truststore.password=test-secret
+          ssl.truststore.type=PKCS12
+          EOF
+          kafka-topics --bootstrap-server localhost:29095 --command-config /tmp/security-client.properties --list >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - kafka-sasl-ssl-data:/var/lib/kafka/data
+      - ./testing/secrets/generated:/etc/kafka/secrets:ro
+
+  init-topics-sasl-ssl:
+    profiles:
+      - sasl-ssl
+    image: confluentinc/cp-kafka:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+    depends_on:
+      kafka-sasl-ssl:
+        condition: service_healthy
+    command:
+      - bash
+      - -lc
+      - |
+        cat >/tmp/security-client.properties <<'EOF'
+        security.protocol=SASL_SSL
+        sasl.mechanism=PLAIN
+        sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret";
+        ssl.truststore.location=/etc/kafka/secrets/broker.truststore.p12
+        ssl.truststore.password=test-secret
+        ssl.truststore.type=PKCS12
+        EOF
+        kafka-topics --bootstrap-server kafka-sasl-ssl:29095 --command-config /tmp/security-client.properties --create --if-not-exists --topic orders --partitions 12 --replication-factor 1
+        kafka-topics --bootstrap-server kafka-sasl-ssl:29095 --command-config /tmp/security-client.properties --create --if-not-exists --topic binary-events --partitions 12 --replication-factor 1
+    volumes:
+      - ./testing/secrets/generated:/etc/kafka/secrets:ro
+
+  kafka-rest-proxy-go-sasl-ssl:
+    profiles:
+      - sasl-ssl
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kafka-rest-proxy-go:dev
+    container_name: kafka-rest-proxy-go-sasl-ssl
+    depends_on:
+      init-topics-sasl-ssl:
+        condition: service_completed_successfully
+    ports:
+      - "18082:8080"
+    environment:
+      HTTP_ADDR: ":8080"
+      KAFKA_BROKERS: kafka-sasl-ssl:29095
+      KAFKA_CLIENT_ID: kafka-rest-proxy-go-sasl-ssl
+      KAFKA_REQUIRED_ACKS: all
+      KAFKA_COMPRESSION: lz4
+      KAFKA_LINGER: 0ms
+      KAFKA_TLS_ENABLE: "true"
+      KAFKA_TLS_CA_FILE: /etc/kafka/tls/ca.crt
+      KAFKA_SASL_MECHANISM: PLAIN
+      KAFKA_SASL_USERNAME: proxy
+      KAFKA_SASL_PASSWORD: proxy-secret
+      TOPIC_ALLOWLIST: orders,binary-events,integration-*
+      PRODUCE_TIMEOUT: 10s
+    volumes:
+      - ./testing/secrets/generated:/etc/kafka/tls:ro
+
+  kafka-mtls:
+    profiles:
+      - mtls
+    image: confluentinc/cp-kafka:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+    hostname: kafka-mtls
+    container_name: kafka-rest-proxy-go-kafka-mtls
+    ports:
+      - "9097:9097"
+    environment:
+      CLUSTER_ID: ${KAFKA_MTLS_CLUSTER_ID:-TUtBRkxLQVJFU1RNVExT}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-mtls:9093
+      KAFKA_LISTENERS: SSL://0.0.0.0:29097,CONTROLLER://0.0.0.0:9093,SSL_HOST://0.0.0.0:9097
+      KAFKA_ADVERTISED_LISTENERS: SSL://kafka-mtls:29097,SSL_HOST://localhost:9097
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,SSL:SSL,SSL_HOST:SSL
+      KAFKA_INTER_BROKER_LISTENER_NAME: SSL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_SSL_KEYSTORE_FILENAME: broker.keystore.p12
+      KAFKA_SSL_KEY_CREDENTIALS: broker_sslkey_creds
+      KAFKA_SSL_KEYSTORE_CREDENTIALS: broker_keystore_creds
+      KAFKA_SSL_TRUSTSTORE_FILENAME: broker.truststore.p12
+      KAFKA_SSL_TRUSTSTORE_CREDENTIALS: broker_truststore_creds
+      KAFKA_SSL_KEYSTORE_LOCATION: /etc/kafka/secrets/broker.keystore.p12
+      KAFKA_SSL_KEYSTORE_PASSWORD: test-secret
+      KAFKA_SSL_KEYSTORE_TYPE: PKCS12
+      KAFKA_SSL_TRUSTSTORE_LOCATION: /etc/kafka/secrets/broker.truststore.p12
+      KAFKA_SSL_TRUSTSTORE_PASSWORD: test-secret
+      KAFKA_SSL_TRUSTSTORE_TYPE: PKCS12
+      KAFKA_SSL_CLIENT_AUTH: required
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 12
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          cat >/tmp/mtls-client.properties <<'EOF'
+          security.protocol=SSL
+          ssl.truststore.location=/etc/kafka/secrets/broker.truststore.p12
+          ssl.truststore.password=test-secret
+          ssl.truststore.type=PKCS12
+          ssl.keystore.location=/etc/kafka/secrets/client.keystore.p12
+          ssl.keystore.password=test-secret
+          ssl.keystore.type=PKCS12
+          ssl.key.password=test-secret
+          EOF
+          kafka-topics --bootstrap-server localhost:29097 --command-config /tmp/mtls-client.properties --list >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - kafka-mtls-data:/var/lib/kafka/data
+      - ./testing/secrets/generated:/etc/kafka/secrets:ro
+
+  init-topics-mtls:
+    profiles:
+      - mtls
+    image: confluentinc/cp-kafka:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+    depends_on:
+      kafka-mtls:
+        condition: service_healthy
+    command:
+      - bash
+      - -lc
+      - |
+        cat >/tmp/mtls-client.properties <<'EOF'
+        security.protocol=SSL
+        ssl.truststore.location=/etc/kafka/secrets/broker.truststore.p12
+        ssl.truststore.password=test-secret
+        ssl.truststore.type=PKCS12
+        ssl.keystore.location=/etc/kafka/secrets/client.keystore.p12
+        ssl.keystore.password=test-secret
+        ssl.keystore.type=PKCS12
+        ssl.key.password=test-secret
+        EOF
+        kafka-topics --bootstrap-server kafka-mtls:29097 --command-config /tmp/mtls-client.properties --create --if-not-exists --topic orders --partitions 12 --replication-factor 1
+        kafka-topics --bootstrap-server kafka-mtls:29097 --command-config /tmp/mtls-client.properties --create --if-not-exists --topic binary-events --partitions 12 --replication-factor 1
+    volumes:
+      - ./testing/secrets/generated:/etc/kafka/secrets:ro
+
+  kafka-rest-proxy-go-mtls:
+    profiles:
+      - mtls
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kafka-rest-proxy-go:dev
+    container_name: kafka-rest-proxy-go-mtls
+    depends_on:
+      init-topics-mtls:
+        condition: service_completed_successfully
+    ports:
+      - "18084:8080"
+    environment:
+      HTTP_ADDR: ":8080"
+      KAFKA_BROKERS: kafka-mtls:29097
+      KAFKA_CLIENT_ID: kafka-rest-proxy-go-mtls
+      KAFKA_REQUIRED_ACKS: all
+      KAFKA_COMPRESSION: lz4
+      KAFKA_LINGER: 0ms
+      KAFKA_TLS_ENABLE: "true"
+      KAFKA_TLS_CA_FILE: /etc/kafka/tls/ca.crt
+      KAFKA_TLS_CERT_FILE: /etc/kafka/tls/client.crt
+      KAFKA_TLS_KEY_FILE: /etc/kafka/tls/client.key
+      TOPIC_ALLOWLIST: orders,binary-events,integration-*
+      PRODUCE_TIMEOUT: 10s
+    volumes:
+      - ./testing/secrets/generated:/etc/kafka/tls:ro
+
+  kafka-acl:
+    profiles:
+      - acl
+    image: confluentinc/cp-kafka:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+    hostname: kafka-acl
+    container_name: kafka-rest-proxy-go-kafka-acl
+    ports:
+      - "9096:9096"
+    environment:
+      CLUSTER_ID: ${KAFKA_ACL_CLUSTER_ID:-TUtBRkxLQVJFU1RBQ0w}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-acl:9093
+      KAFKA_LISTENERS: SASL_PLAINTEXT://0.0.0.0:29096,CONTROLLER://0.0.0.0:9093,SASL_PLAINTEXT_HOST://0.0.0.0:9096
+      KAFKA_ADVERTISED_LISTENERS: SASL_PLAINTEXT://kafka-acl:29096,SASL_PLAINTEXT_HOST://localhost:9096
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,SASL_PLAINTEXT:SASL_PLAINTEXT,SASL_PLAINTEXT_HOST:SASL_PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: SASL_PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: PLAIN
+      KAFKA_OPTS: -Djava.security.auth.login.config=/etc/kafka/secrets/kafka_server_jaas.conf
+      KAFKA_LISTENER_NAME_SASL_PLAINTEXT_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret" user_admin="admin-secret" user_proxy="proxy-secret";
+      KAFKA_LISTENER_NAME_SASL_PLAINTEXT_HOST_PLAIN_SASL_JAAS_CONFIG: org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret" user_admin="admin-secret" user_proxy="proxy-secret";
+      KAFKA_AUTHORIZER_CLASS_NAME: org.apache.kafka.metadata.authorizer.StandardAuthorizer
+      KAFKA_ALLOW_EVERYONE_IF_NO_ACL_FOUND: "false"
+      KAFKA_SUPER_USERS: User:admin;User:ANONYMOUS
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_NUM_PARTITIONS: 12
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          cat >/tmp/security-client.properties <<'EOF'
+          security.protocol=SASL_PLAINTEXT
+          sasl.mechanism=PLAIN
+          sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret";
+          EOF
+          kafka-topics --bootstrap-server localhost:29096 --command-config /tmp/security-client.properties --list >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - kafka-acl-data:/var/lib/kafka/data
+      - ./docker/security/kafka_server_jaas.conf:/etc/kafka/secrets/kafka_server_jaas.conf:ro
+
+  init-topics-acl:
+    profiles:
+      - acl
+    image: confluentinc/cp-kafka:${CONFLUENT_PLATFORM_VERSION:-7.7.1}
+    depends_on:
+      kafka-acl:
+        condition: service_healthy
+    command:
+      - bash
+      - -lc
+      - |
+        cat >/tmp/security-client.properties <<'EOF'
+        security.protocol=SASL_PLAINTEXT
+        sasl.mechanism=PLAIN
+        sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="admin" password="admin-secret";
+        EOF
+        kafka-topics --bootstrap-server kafka-acl:29096 --command-config /tmp/security-client.properties --create --if-not-exists --topic acl-allowed --partitions 3 --replication-factor 1
+        kafka-topics --bootstrap-server kafka-acl:29096 --command-config /tmp/security-client.properties --create --if-not-exists --topic acl-denied --partitions 3 --replication-factor 1
+        kafka-acls --bootstrap-server kafka-acl:29096 --command-config /tmp/security-client.properties --add --allow-principal User:proxy --operation WRITE --operation DESCRIBE --topic acl-allowed
+
+  kafka-rest-proxy-go-acl:
+    profiles:
+      - acl
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kafka-rest-proxy-go:dev
+    container_name: kafka-rest-proxy-go-acl
+    depends_on:
+      init-topics-acl:
+        condition: service_completed_successfully
+    ports:
+      - "18083:8080"
+    environment:
+      HTTP_ADDR: ":8080"
+      KAFKA_BROKERS: kafka-acl:29096
+      KAFKA_CLIENT_ID: kafka-rest-proxy-go-acl
+      KAFKA_REQUIRED_ACKS: all
+      KAFKA_COMPRESSION: lz4
+      KAFKA_LINGER: 0ms
+      KAFKA_SASL_MECHANISM: PLAIN
+      KAFKA_SASL_USERNAME: proxy
+      KAFKA_SASL_PASSWORD: proxy-secret
+      TOPIC_ALLOWLIST: acl-*
+      PRODUCE_TIMEOUT: 10s
+
 volumes:
   kafka-security-data:
+  kafka-sasl-ssl-data:
+  kafka-mtls-data:
+  kafka-acl-data:

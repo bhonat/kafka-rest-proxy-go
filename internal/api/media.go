@@ -7,10 +7,13 @@ import (
 )
 
 const (
-	mediaKafkaV2       = "application/vnd.kafka.v2+json"
-	mediaKafkaJSONV2   = "application/vnd.kafka.json.v2+json"
-	mediaKafkaBinaryV2 = "application/vnd.kafka.binary.v2+json"
-	mediaJSON          = "application/json"
+	mediaKafkaV2         = "application/vnd.kafka.v2+json"
+	mediaKafkaJSONV2     = "application/vnd.kafka.json.v2+json"
+	mediaKafkaBinaryV2   = "application/vnd.kafka.binary.v2+json"
+	mediaKafkaAvroV2     = "application/vnd.kafka.avro.v2+json"
+	mediaKafkaProtobufV2 = "application/vnd.kafka.protobuf.v2+json"
+	mediaKafkaJSONSchV2  = "application/vnd.kafka.jsonschema.v2+json"
+	mediaJSON            = "application/json"
 )
 
 type payloadFormat int
@@ -18,14 +21,36 @@ type payloadFormat int
 const (
 	formatJSON payloadFormat = iota
 	formatBinary
+	formatAvro
+	formatProtobuf
+	formatJSONSchema
 )
 
 func (f payloadFormat) String() string {
 	switch f {
 	case formatBinary:
 		return "binary"
+	case formatAvro:
+		return "avro"
+	case formatProtobuf:
+		return "protobuf"
+	case formatJSONSchema:
+		return "jsonschema"
 	default:
 		return "json"
+	}
+}
+
+func (f payloadFormat) schemaType() string {
+	switch f {
+	case formatAvro:
+		return "AVRO"
+	case formatProtobuf:
+		return "PROTOBUF"
+	case formatJSONSchema:
+		return "JSONSCHEMA"
+	default:
+		return ""
 	}
 }
 
@@ -42,6 +67,12 @@ func parseContentType(header string) (payloadFormat, bool) {
 		return formatJSON, true
 	case mediaKafkaBinaryV2:
 		return formatBinary, true
+	case mediaKafkaAvroV2:
+		return formatAvro, true
+	case mediaKafkaProtobufV2:
+		return formatProtobuf, true
+	case mediaKafkaJSONSchV2:
+		return formatJSONSchema, true
 	default:
 		return formatJSON, false
 	}
@@ -58,7 +89,7 @@ func acceptsResponse(r *http.Request) bool {
 			continue
 		}
 		switch strings.ToLower(mt) {
-		case "*/*", "application/*", mediaKafkaV2, mediaKafkaJSONV2, mediaKafkaBinaryV2, mediaJSON:
+		case "*/*", "application/*", mediaKafkaV2, mediaKafkaJSONV2, mediaKafkaBinaryV2, mediaKafkaAvroV2, mediaKafkaProtobufV2, mediaKafkaJSONSchV2, mediaJSON:
 			return true
 		}
 	}

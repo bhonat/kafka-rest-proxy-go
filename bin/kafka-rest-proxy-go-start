@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+set -eu
+
+config_file="${KAFKA_REST_PROXY_GO_CONFIG:-/etc/kafka-rest-proxy-go/kafka-rest-proxy-go.env}"
+if [ -f "$config_file" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$config_file"
+  set +a
+fi
+
+exec "${KAFKA_REST_PROXY_GO_BIN:-kafka-rest-proxy-go}"

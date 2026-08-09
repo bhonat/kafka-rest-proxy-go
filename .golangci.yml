@@ -1,0 +1,23 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+    - gosec
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+linters-settings:
+  revive:
+    rules:
+      - name: exported
+        disabled: true
+  gosec:
+    excludes:
+      - G404

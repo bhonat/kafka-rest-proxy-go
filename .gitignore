@@ -1,5 +1,7 @@
 .DS_Store
-bin/
+bin/*
+!bin/kafka-rest-proxy-go-start
+!bin/kafka-rest-proxy-go-stop
 dist/
 coverage.out
 *.test
@@ -8,3 +10,4 @@ coverage.out
 .gocache/
 .gomodcache/
 vendor/
+testing/secrets/generated/

@@ -1,0 +1,519 @@
+openapi: 3.1.0
+info:
+  title: KafkaRestProxy-Go Producer API
+  version: 0.1.0
+  description: |
+    Producer-only REST API compatible with the Confluent Kafka REST Proxy v2
+    producer endpoint for JSON, binary, and schema-aware records.
+
+    Compatibility scope:
+
+    * `POST /topics/{topic}`
+    * `application/vnd.kafka.json.v2+json`
+    * `application/vnd.kafka.binary.v2+json`
+    * `application/vnd.kafka.avro.v2+json`
+    * `application/vnd.kafka.protobuf.v2+json`
+    * `application/vnd.kafka.jsonschema.v2+json`
+    * `application/vnd.kafka.v2+json` responses
+    * Per-record Kafka produce results in `offsets[]`
+
+    Out of scope for this service version:
+
+    * Consumer APIs
+    * Admin APIs
+servers:
+  - url: http://localhost:8080
+    description: Local Go proxy
+paths:
+  /topics/{topic}:
+    post:
+      operationId: produceToTopic
+      summary: Produce records to a Kafka topic
+      description: |
+        Produces one or more records to a Kafka topic and returns Confluent-style
+        per-record partition, offset, and error metadata.
+
+        Kafka-side record failures are represented as HTTP `200` responses with
+        `offsets[].error_code` and `offsets[].error`, matching the Confluent REST
+        Proxy producer behavior observed in compatibility tests.
+      parameters:
+        - name: topic
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Kafka topic name.
+      requestBody:
+        required: true
+        content:
+          application/vnd.kafka.json.v2+json:
+            schema:
+              $ref: "#/components/schemas/JsonProduceRequest"
+            examples:
+              objectValue:
+                summary: JSON object value
+                value:
+                  records:
+                    - key: customer-1
+                      value:
+                        order_id: order-1
+                        total: 42
+                      partition: 2
+              nullValue:
+                summary: Tombstone/null value
+                value:
+                  records:
+                    - key: customer-1
+                      value: null
+          application/vnd.kafka.binary.v2+json:
+            schema:
+              $ref: "#/components/schemas/BinaryProduceRequest"
+            examples:
+              binaryValue:
+                summary: Base64-encoded key and value
+                value:
+                  records:
+                    - key: Y3VzdG9tZXItMQ==
+                      value: aGVsbG8=
+                      partition: 0
+          application/vnd.kafka.avro.v2+json:
+            schema:
+              $ref: "#/components/schemas/SchemaProduceRequest"
+          application/vnd.kafka.protobuf.v2+json:
+            schema:
+              $ref: "#/components/schemas/SchemaProduceRequest"
+          application/vnd.kafka.jsonschema.v2+json:
+            schema:
+              $ref: "#/components/schemas/SchemaProduceRequest"
+      responses:
+        "200":
+          description: Produce request accepted by the Kafka producer; inspect each offset result for per-record failures.
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                examples:
+                  - application/vnd.kafka.v2+json
+          content:
+            application/vnd.kafka.v2+json:
+              schema:
+                $ref: "#/components/schemas/ProduceResponse"
+              examples:
+                success:
+                  value:
+                    offsets:
+                      - partition: 2
+                        offset: 91823
+                        error_code: null
+                        error: null
+                    key_schema_id: null
+                    value_schema_id: null
+                perRecordFailure:
+                  value:
+                    offsets:
+                      - partition: null
+                        offset: null
+                        error_code: 50002
+                        error: "UNKNOWN_TOPIC_OR_PARTITION: This server does not host this topic-partition."
+                    key_schema_id: null
+                    value_schema_id: null
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+  /topics/{topic}/partitions/{partition}:
+    post:
+      operationId: produceToPartition
+      summary: Produce records to an explicit Kafka topic partition
+      description: |
+        Produces one or more records to a specific Kafka topic partition and
+        returns the same Confluent-style `offsets[]` response as topic produce.
+
+        This mirrors the Confluent REST Proxy v2 partition producer resource:
+
+        `POST /topics/{topic}/partitions/{partition}`
+
+        The path partition is applied to every decoded record.
+      parameters:
+        - name: topic
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Kafka topic name.
+        - name: partition
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+          description: Kafka partition id.
+      requestBody:
+        required: true
+        content:
+          application/vnd.kafka.json.v2+json:
+            schema:
+              $ref: "#/components/schemas/JsonPartitionProduceRequest"
+            examples:
+              objectValue:
+                summary: JSON object value
+                value:
+                  records:
+                    - key: customer-1
+                      value:
+                        order_id: order-1
+                        total: 42
+          application/vnd.kafka.binary.v2+json:
+            schema:
+              $ref: "#/components/schemas/BinaryPartitionProduceRequest"
+            examples:
+              binaryValue:
+                summary: Base64-encoded key and value
+                value:
+                  records:
+                    - key: Y3VzdG9tZXItMQ==
+                      value: aGVsbG8=
+      responses:
+        "200":
+          description: Produce request accepted by the Kafka producer; inspect each offset result for per-record failures.
+          content:
+            application/vnd.kafka.v2+json:
+              schema:
+                $ref: "#/components/schemas/ProduceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "406":
+          $ref: "#/components/responses/NotAcceptable"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
+  /healthz:
+    get:
+      operationId: healthz
+      summary: Process health check
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+  /readyz:
+    get:
+      operationId: readyz
+      summary: Kafka readiness check
+      responses:
+        "200":
+          description: Kafka producer client can reach the cluster.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  schemas:
+    JsonProduceRequest:
+      type: object
+      required:
+        - records
+      properties:
+        records:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/JsonProduceRecord"
+    JsonProduceRecord:
+      type: object
+      properties:
+        key:
+          description: JSON value encoded as Kafka record key bytes. Missing and null keys become nil Kafka keys.
+        value:
+          description: JSON value encoded as Kafka record value bytes. Missing and null values become nil Kafka values.
+        partition:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Optional explicit Kafka partition.
+        headers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Header"
+    JsonPartitionProduceRequest:
+      type: object
+      required:
+        - records
+      properties:
+        records:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/JsonPartitionProduceRecord"
+    JsonPartitionProduceRecord:
+      type: object
+      properties:
+        key:
+          description: JSON value encoded as Kafka record key bytes. Missing and null keys become nil Kafka keys.
+        value:
+          description: JSON value encoded as Kafka record value bytes. Missing and null values become nil Kafka values.
+        headers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Header"
+    BinaryProduceRequest:
+      type: object
+      required:
+        - records
+      properties:
+        records:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/BinaryProduceRecord"
+    BinaryProduceRecord:
+      type: object
+      properties:
+        key:
+          type:
+            - string
+            - "null"
+          contentEncoding: base64
+          description: Base64-encoded Kafka key. Missing and null keys become nil Kafka keys.
+        value:
+          type:
+            - string
+            - "null"
+          contentEncoding: base64
+          description: Base64-encoded Kafka value. Missing and null values become nil Kafka values.
+        partition:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Optional explicit Kafka partition.
+        headers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Header"
+    BinaryPartitionProduceRequest:
+      type: object
+      required:
+        - records
+      properties:
+        records:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/BinaryPartitionProduceRecord"
+    BinaryPartitionProduceRecord:
+      type: object
+      properties:
+        key:
+          type:
+            - string
+            - "null"
+          contentEncoding: base64
+          description: Base64-encoded Kafka key. Missing and null keys become nil Kafka keys.
+        value:
+          type:
+            - string
+            - "null"
+          contentEncoding: base64
+          description: Base64-encoded Kafka value. Missing and null values become nil Kafka values.
+        headers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Header"
+    SchemaProduceRequest:
+      type: object
+      required:
+        - records
+      properties:
+        key_schema:
+          type: string
+          description: Optional schema text for record keys.
+        key_schema_id:
+          type:
+            - integer
+            - "null"
+          description: Optional Schema Registry id for record keys.
+        value_schema:
+          type: string
+          description: Optional schema text for record values.
+        value_schema_id:
+          type:
+            - integer
+            - "null"
+          description: Optional Schema Registry id for record values.
+        records:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/JsonProduceRecord"
+    Header:
+      type: object
+      required:
+        - key
+        - value
+      properties:
+        key:
+          type: string
+          minLength: 1
+        value:
+          description: Header value encoded using the same JSON or binary rules as the record format.
+    ProduceResponse:
+      type: object
+      required:
+        - offsets
+        - key_schema_id
+        - value_schema_id
+      properties:
+        offsets:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProduceOffset"
+        key_schema_id:
+          type:
+            - integer
+            - "null"
+          description: Schema Registry key schema id when a schema-aware key format is used.
+        value_schema_id:
+          type:
+            - integer
+            - "null"
+          description: Schema Registry value schema id when a schema-aware value format is used.
+    ProduceOffset:
+      type: object
+      required:
+        - partition
+        - offset
+        - error_code
+        - error
+      properties:
+        partition:
+          type:
+            - integer
+            - "null"
+          format: int32
+        offset:
+          type:
+            - integer
+            - "null"
+          format: int64
+        error_code:
+          type:
+            - integer
+            - "null"
+        error:
+          type:
+            - string
+            - "null"
+    ErrorResponse:
+      type: object
+      required:
+        - error_code
+        - message
+      properties:
+        error_code:
+          type: integer
+        message:
+          type: string
+    StatusResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+  responses:
+    BadRequest:
+      description: Malformed JSON, malformed binary data, or validation error.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Topic is denied by the proxy allowlist.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotAcceptable:
+      description: Unsupported `Accept` header.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    PayloadTooLarge:
+      description: Request body exceeds configured limit.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnsupportedMediaType:
+      description: Unsupported `Content-Type` header.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntity:
+      description: Syntactically valid request with an invalid producer record envelope, such as missing or empty `records`.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TooManyRequests:
+      description: Producer admission/backpressure rejected the request.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Kafka producer or cluster is unavailable.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    GatewayTimeout:
+      description: Produce request timed out.
+      content:
+        application/vnd.kafka.v2+json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"

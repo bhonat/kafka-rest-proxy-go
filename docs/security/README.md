@@ -20,6 +20,9 @@ restriction, and reducing accidental diagnostic exposure.
 - Metrics are exposed on `/metrics` when the service is built with metrics; in
   the default binary this is enabled and should be protected by bearer auth or by
   network policy in production.
+- Kafka TLS and mTLS client authentication are supported through
+  `KAFKA_TLS_ENABLE`, `KAFKA_TLS_CA_FILE`, `KAFKA_TLS_CERT_FILE`, and
+  `KAFKA_TLS_KEY_FILE`.
 
 ## Intentional probe behavior
 
@@ -37,7 +40,7 @@ This MVP does not yet provide:
 - JWT/OIDC validation;
 - per-tenant or per-principal topic authorization;
 - dynamic token reload;
-- mTLS client identity;
+- HTTP client mTLS identity;
 - a separate metrics or admin listener;
 - structured audit logs;
 - secret-manager integration.

@@ -1,7 +1,8 @@
 # Producer compatibility hardening
 
 This directory contains compatibility assets for the producer-only Confluent REST
-Proxy API implemented by this project.
+Proxy API implemented by this project: v2 topic/partition produce, v2
+schema-aware media types, and the v3 records / records:batch producer surface.
 
 ## Golden fixture tests
 
@@ -39,12 +40,24 @@ Optional environment variables:
 | `KAFKA_REST_CONFLUENT_URL` | `http://localhost:8082` | Confluent REST Proxy base URL |
 | `KAFKA_REST_DIFFERENTIAL_TOPIC` | `orders` | Existing JSON test topic |
 | `KAFKA_REST_DIFFERENTIAL_BINARY_TOPIC` | `binary-events` | Existing binary test topic |
+| `KAFKA_REST_DIFFERENTIAL_CLUSTER_ID` | `MkU3OEVBNTcwNTJENDM2Qk` | Cluster id for v3 producer paths |
 | `KAFKA_REST_DIFFERENTIAL_TIMEOUT` | `10s` | Per-request timeout |
+| `KAFKA_REST_DIFFERENTIAL_V3` | unset | Set to `1` to also compare v3 records and records:batch |
+| `KAFKA_REST_DIFFERENTIAL_SCHEMA` | unset | Set to `1` to also compare v2 Avro/Protobuf/JSON Schema requests |
 | `KAFKA_REST_DIFFERENTIAL_EDGE` | unset | Set to `1` to also run diagnostic invalid topic/partition cases |
+
+The full producer-surface comparison requires the comparison and Schema Registry
+profiles:
+
+```bash
+docker compose --profile comparison --profile schema-registry up --build -d
+make test-differential-full
+```
 
 The strict default scenarios are:
 
 - JSON produce success
+- JSON partition produce success
 - missing record `key`
 - `key:null`
 - `value:null`
@@ -53,11 +66,25 @@ The strict default scenarios are:
 - omitted/default `Accept`
 - larger JSON batch with 10 records
 - binary produce success
+- binary partition produce success
 - binary `key:null` / `value:null`
 - binary bad base64
 - malformed JSON
 - unsupported media type
 - unsupported `Accept`
+- OpenAPI contract coverage for v2 JSON/binary/schema media types and v3
+  records / records:batch endpoints
+
+Unit coverage also exercises schema-aware producer encoding against in-memory and
+mocked Schema Registry clients for Avro, Protobuf, and JSON Schema.
+
+The Docker-backed Schema Registry integration gate verifies Avro, Protobuf, and
+JSON Schema registration and Confluent wire-format production:
+
+```bash
+docker compose --profile schema-registry up --build -d
+make test-schema-registry-integration
+```
 
 The default diagnostic scenarios are:
 
@@ -66,14 +93,12 @@ The default diagnostic scenarios are:
 - `records:null`
 - missing record `value`
 
-These are diagnostic because local Confluent REST Proxy behavior currently
-differs from the Go proxy:
+These stay in the differential harness as diagnostics because exact error
+messages can vary by Confluent REST Proxy version, but the Go proxy now follows
+the observed broad behavior:
 
-- Confluent returns `422` for empty, missing, or null `records`; the Go proxy
-  currently returns `200` for empty `records[]` and `400` for missing/null
-  `records`.
-- Confluent treats a record with a missing `value` as a successful null-value
-  produce; the Go proxy currently treats missing `value` as a bad request.
+- empty, missing, or null `records` return HTTP `422`;
+- missing record `value` is treated as a successful null-value produce.
 
 Response normalization intentionally ignores nondeterministic offsets and exact
 human-readable error strings while still comparing status, response shape,
@@ -104,8 +129,8 @@ edge diagnostics currently show these known divergences:
 - Invalid topics are rejected by the Go proxy's topic allowlist with `403`,
   while Confluent forwards to Kafka and returns HTTP `200` with a per-record
   Kafka error.
-- Negative partitions are treated like normal partitioner selection by the Go
-  proxy/franz-go path, while local Confluent returns HTTP `500`.
+- Negative partitions are rejected by the Go proxy validation layer, while local
+  Confluent returns HTTP `500`.
 - Very large partition numbers return a per-record Kafka error from the Go
   proxy; local Confluent may time out before returning a response.
 - Record `headers` are accepted by the Go proxy but rejected by local Confluent

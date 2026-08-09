@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	go build -trimpath -ldflags="-s -w" -o kafka-rest-proxy-go ./cmd/kafka-rest-proxy-go
+
+override_dh_auto_install:
+	install -D -m 0755 kafka-rest-proxy-go debian/kafka-rest-proxy-go/usr/bin/kafka-rest-proxy-go
+	install -D -m 0644 config/kafka-rest-proxy-go.env debian/kafka-rest-proxy-go/etc/kafka-rest-proxy-go/kafka-rest-proxy-go.env
+	install -D -m 0644 debian/kafka-rest-proxy-go.service debian/kafka-rest-proxy-go/lib/systemd/system/kafka-rest-proxy-go.service

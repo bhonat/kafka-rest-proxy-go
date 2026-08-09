@@ -14,17 +14,27 @@ const (
 	errorCodeForbidden          = 403
 	errorCodeNotAcceptable      = 406
 	errorCodeUnsupportedMedia   = 415
-	errorCodeUnprocessable      = 42201
+	errorCodeUnprocessable      = 422
 	errorCodeTooManyRequests    = 429
 	errorCodeProduceUnavailable = 503
 	errorCodeTimeout            = 504
 )
+
+const rateLimitMessage = "Request rate limit exceeded: The rate limit of requests per second has been exceeded."
 
 type validationError struct {
 	message string
 }
 
 func (e validationError) Error() string {
+	return e.message
+}
+
+type unprocessableError struct {
+	message string
+}
+
+func (e unprocessableError) Error() string {
 	return e.message
 }
 
@@ -37,15 +47,19 @@ func writeAPIError(w http.ResponseWriter, status int, code int, message string) 
 	})
 }
 
+func writeRateLimitExceeded(w http.ResponseWriter) {
+	writeAPIError(w, http.StatusTooManyRequests, errorCodeTooManyRequests, rateLimitMessage)
+}
+
 func classifyProduceError(err error) (status int, code int, message string) {
 	switch {
 	case errors.Is(err, producer.ErrOverloaded):
 		return http.StatusTooManyRequests, errorCodeTooManyRequests, "producer is overloaded"
-	case errors.Is(err, contextCanceled):
+	case errors.Is(err, errContextCanceled):
 		return http.StatusGatewayTimeout, errorCodeTimeout, "produce request timed out"
 	default:
 		return http.StatusServiceUnavailable, errorCodeProduceUnavailable, err.Error()
 	}
 }
 
-var contextCanceled = errors.New("context canceled or timed out")
+var errContextCanceled = errors.New("context canceled or timed out")

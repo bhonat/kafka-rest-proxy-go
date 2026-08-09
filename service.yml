@@ -1,0 +1,15 @@
+name: kafka-rest-proxy-go
+summary: Producer-only Confluent-compatible Kafka REST proxy in Go
+description: |
+  KafkaRestProxy-Go implements the Confluent Kafka REST Proxy v2 producer
+  JSON/binary API surface backed by a shared asynchronous franz-go Kafka
+  producer.
+command: /usr/bin/kafka-rest-proxy-go
+config: /etc/kafka-rest-proxy-go/kafka-rest-proxy-go.env
+ports:
+  - 8080
+health:
+  liveness: /healthz
+  readiness: /readyz
+metrics:
+  prometheus: /metrics

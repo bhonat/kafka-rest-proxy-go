@@ -8,6 +8,10 @@ Build a Go producer-only Kafka REST gateway that is compatible with the Confluen
 POST /topics/{topic}
 ```
 
+The implementation has since expanded beyond the initial MVP to include the
+v2 partition producer endpoint, schema-aware v2 producer media types, and the v3
+records / records:batch producer surface.
+
 The service should improve the implementation surface for throughput work by avoiding the full Confluent REST Proxy feature set and relying on a shared asynchronous Go Kafka producer.
 
 ## MVP compatibility target
@@ -24,16 +28,17 @@ Supported now:
 - `partition`
 - `headers`
 - `offsets[]` response
-
-Deferred:
-
 - Avro
 - Protobuf
 - JSON Schema
 - Schema Registry integration
+
+Still deferred:
+
 - consumers
 - topic admin endpoints
 - exact Confluent error-code parity for every edge case
+- complex Schema Registry reference/import graphs
 
 ## Architecture
 

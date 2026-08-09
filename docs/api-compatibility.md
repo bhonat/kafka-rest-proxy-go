@@ -6,6 +6,56 @@
 POST /topics/{topic}
 ```
 
+```http
+POST /topics/{topic}/partitions/{partition}
+```
+
+The partition endpoint mirrors Confluent REST Proxy v2's partition producer
+resource. The path partition is applied to every decoded record.
+
+## v3 producer endpoints
+
+The producer-only v3 surface is documented in
+[`api/v3/openapi.yaml`](../api/v3/openapi.yaml).
+
+```http
+POST /v3/clusters/{cluster_id}/topics/{topic_name}/records
+```
+
+```http
+POST /v3/clusters/{cluster_id}/topics/{topic_name}/records:batch
+```
+
+`cluster_id` must match `KAFKA_CLUSTER_ID`, which defaults to `local`.
+
+The single-record endpoint accepts one JSON producer request or a concatenated
+stream of JSON producer requests and returns newline-delimited delivery reports.
+The batch endpoint accepts:
+
+```json
+{
+  "entries": [
+    {
+      "id": "record-1",
+      "partition_id": 0,
+      "key": {
+        "type": "STRING",
+        "data": "customer-123"
+      },
+      "value": {
+        "type": "JSON",
+        "data": {
+          "order_id": "order-456"
+        }
+      }
+    }
+  ]
+}
+```
+
+and returns `successes[]` and `failures[]` using the same per-record Kafka
+delivery result model.
+
 ## JSON request
 
 ```http
@@ -48,6 +98,38 @@ Accept: application/vnd.kafka.v2+json
 ```
 
 For binary media types, `key` and `value` must be base64 strings or `null`.
+
+## Schema-aware v2 requests
+
+Schema-aware producer media types are supported for the producer path:
+
+```text
+application/vnd.kafka.avro.v2+json
+application/vnd.kafka.protobuf.v2+json
+application/vnd.kafka.jsonschema.v2+json
+```
+
+The request can provide a schema id, schema text, or resolve the configured
+subject through Schema Registry:
+
+```json
+{
+  "value_schema": "{\"type\":\"record\",\"name\":\"Order\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}",
+  "records": [
+    {
+      "key": "customer-123",
+      "value": {
+        "id": "order-456"
+      }
+    }
+  ]
+}
+```
+
+Schema-aware records are encoded with the Confluent wire-format prefix before
+being produced to Kafka. Avro uses Avro binary encoding, JSON Schema validates
+and stores compact JSON bytes, and Protobuf uses binary protobuf encoding for
+the first message in the supplied schema.
 
 ## Response
 
@@ -98,9 +180,9 @@ record error code `50002`.
 
 ## Known MVP gaps
 
-The MVP is intentionally close rather than exact:
+The producer surface is intentionally close rather than byte-for-byte exact:
 
 - Error bodies are aligned for captured JSON/binary cases but not exhaustively code-compatible.
-- Schema-aware media types are not implemented.
+- Complex Schema Registry reference/import graphs are not implemented yet.
 - Header compatibility should be validated against the exact Confluent REST Proxy version in use.
 - Numeric JSON semantics should be validated against client expectations.

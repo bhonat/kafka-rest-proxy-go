@@ -1,0 +1,9 @@
+KafkaRestProxy-Go
+Copyright 2026 KafkaRestProxy-Go contributors
+
+This product includes software developed by third-party open-source projects.
+See licenses/ for release-time third-party dependency notice guidance.
+
+Kafka and Confluent REST Proxy are trademarks of their respective owners.
+KafkaRestProxy-Go is an independent producer-only compatibility implementation
+and is not affiliated with or endorsed by Confluent.

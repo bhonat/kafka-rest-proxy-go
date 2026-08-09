@@ -1,0 +1,27 @@
+version: v1.0
+name: kafka-rest-proxy-go
+agent:
+  machine:
+    type: e1-standard-2
+    os_image: ubuntu2204
+blocks:
+  - name: Quality
+    task:
+      jobs:
+        - name: go test
+          commands:
+            - checkout
+            - sem-version go 1.25.12
+            - make fmt-check
+            - make openapi-check
+            - make coverage
+            - go vet ./...
+  - name: Docker compose compatibility
+    task:
+      jobs:
+        - name: compose config
+          commands:
+            - checkout
+            - docker compose config >/tmp/docker-compose.yml
+            - docker compose -f docker-compose.cluster.yml config >/tmp/docker-compose-cluster.yml
+            - docker compose -f docker-compose.security.yml config >/tmp/docker-compose-security.yml

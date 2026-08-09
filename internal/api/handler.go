@@ -7,14 +7,18 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/example/kafka-rest-proxy-go/internal/metrics"
 	"github.com/example/kafka-rest-proxy-go/internal/producer"
+	"github.com/example/kafka-rest-proxy-go/internal/ratelimit"
+	schemaproducer "github.com/example/kafka-rest-proxy-go/internal/schema"
 )
 
 type Config struct {
@@ -28,6 +32,12 @@ type Config struct {
 	ProduceTimeout  time.Duration
 	BearerTokens    []string
 	PprofEnable     bool
+	ClusterID       string
+
+	RateLimitRequestsPerSecond float64
+	RateLimitRequestsBurst     int64
+	RateLimitBytesPerSecond    float64
+	RateLimitBytesBurst        int64
 }
 
 type Handler struct {
@@ -38,6 +48,9 @@ type Handler struct {
 	tokens               map[string]struct{}
 	allowedTopics        map[string]struct{}
 	allowedTopicPrefixes []string
+	requestRateLimiter   *ratelimit.Limiter
+	byteRateLimiter      *ratelimit.Limiter
+	schemaEncoder        *schemaproducer.Encoder
 }
 
 type Producer interface {
@@ -46,15 +59,34 @@ type Producer interface {
 }
 
 func NewHandler(p Producer, m *metrics.Metrics, cfg Config, log *slog.Logger) *Handler {
+	return NewHandlerWithSchema(p, m, cfg, log, nil)
+}
+
+func NewHandlerWithSchema(p Producer, m *metrics.Metrics, cfg Config, log *slog.Logger, enc *schemaproducer.Encoder) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
 	cfg = cfg.withDefaults()
 	h := &Handler{
-		producer: p,
-		metrics:  m,
-		cfg:      cfg,
-		log:      log,
+		producer:      p,
+		metrics:       m,
+		cfg:           cfg,
+		log:           log,
+		schemaEncoder: enc,
+	}
+	if cfg.RateLimitRequestsPerSecond > 0 {
+		burst := cfg.RateLimitRequestsBurst
+		if burst <= 0 {
+			burst = int64(math.Ceil(cfg.RateLimitRequestsPerSecond))
+		}
+		h.requestRateLimiter = ratelimit.New(cfg.RateLimitRequestsPerSecond, burst)
+	}
+	if cfg.RateLimitBytesPerSecond > 0 {
+		burst := cfg.RateLimitBytesBurst
+		if burst <= 0 {
+			burst = maxInt64(int64(math.Ceil(cfg.RateLimitBytesPerSecond)), cfg.MaxRequestBytes)
+		}
+		h.byteRateLimiter = ratelimit.New(cfg.RateLimitBytesPerSecond, burst)
 	}
 	if len(cfg.BearerTokens) > 0 {
 		h.tokens = make(map[string]struct{}, len(cfg.BearerTokens))
@@ -87,6 +119,7 @@ func NewHandler(p Producer, m *metrics.Metrics, cfg Config, log *slog.Logger) *H
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/topics/", h.handleTopicProduce)
+	mux.HandleFunc("/v3/clusters/", h.handleV3Produce)
 	mux.HandleFunc("/healthz", h.handleHealth)
 	mux.HandleFunc("/readyz", h.handleReady)
 	if h.metrics != nil {
@@ -151,12 +184,13 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	topic, ok := topicFromPath(r.URL)
+	target, ok := produceTargetFromPath(r.URL)
 	if !ok {
 		status = http.StatusNotFound
 		writeAPIError(w, status, errorCodeBadRequest, "not found")
 		return
 	}
+	topic := target.topic
 	if !h.topicAllowed(topic) {
 		status = http.StatusForbidden
 		writeAPIError(w, status, errorCodeForbidden, "topic is not allowed")
@@ -176,6 +210,15 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.allowRequestRate(1) {
+		status = http.StatusTooManyRequests
+		if h.metrics != nil {
+			h.metrics.ObserveRateLimitRejected("requests")
+		}
+		writeRateLimitExceeded(w)
+		return
+	}
+
 	body, err := readRequestBody(w, r, h.cfg.MaxRequestBytes)
 	bodyLen = int64(len(body))
 	if err != nil {
@@ -190,13 +233,28 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.allowByteRate(bodyLen) {
+		status = http.StatusTooManyRequests
+		if h.metrics != nil {
+			h.metrics.ObserveRateLimitRejected("bytes")
+		}
+		writeRateLimitExceeded(w)
+		return
+	}
+
 	decodeStart := time.Now()
-	records, err := decodeProduceRequest(topic, body, format, h.cfg.decodeLimits())
+	records, responseMeta, err := decodeProduceRequestWithSchema(r.Context(), topic, body, format, h.cfg.decodeLimits(), h.schemaEncoder, target.partition)
 	if h.metrics != nil {
 		h.metrics.ObserveDecode(format.String(), err == nil, time.Since(decodeStart))
 	}
 	if err != nil {
 		status = http.StatusBadRequest
+		var ue unprocessableError
+		if errors.As(err, &ue) {
+			status = http.StatusUnprocessableEntity
+			writeAPIError(w, status, errorCodeUnprocessable, ue.Error())
+			return
+		}
 		var ve validationError
 		if errors.As(err, &ve) {
 			writeAPIError(w, status, errorCodeBadRequest, ve.Error())
@@ -215,7 +273,7 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 	produceWait := time.Since(produceStart)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			err = contextCanceled
+			err = errContextCanceled
 		}
 		var code int
 		var msg string
@@ -238,7 +296,7 @@ func (h *Handler) handleTopicProduce(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", mediaKafkaV2)
 	w.WriteHeader(status)
-	_, _ = w.Write(appendProduceResponse(nil, results))
+	_, _ = w.Write(appendProduceResponse(nil, results, responseMeta))
 }
 
 func readRequestBody(w http.ResponseWriter, r *http.Request, maxBytes int64) ([]byte, error) {
@@ -254,21 +312,39 @@ func readRequestBody(w http.ResponseWriter, r *http.Request, maxBytes int64) ([]
 	return io.ReadAll(bodyReader)
 }
 
-func topicFromPath(u *url.URL) (string, bool) {
+type produceTarget struct {
+	topic     string
+	partition *int32
+}
+
+func produceTargetFromPath(u *url.URL) (produceTarget, bool) {
 	const prefix = "/topics/"
 	path := u.EscapedPath()
 	if !strings.HasPrefix(path, prefix) || len(path) == len(prefix) {
-		return "", false
+		return produceTarget{}, false
 	}
 	rest := strings.TrimPrefix(path, prefix)
-	if strings.Contains(rest, "/") {
-		return "", false
+	segments := strings.Split(rest, "/")
+	if len(segments) != 1 && len(segments) != 3 {
+		return produceTarget{}, false
 	}
-	topic, err := url.PathUnescape(rest)
+
+	topic, err := url.PathUnescape(segments[0])
 	if err != nil || topic == "" {
-		return "", false
+		return produceTarget{}, false
 	}
-	return topic, true
+	if len(segments) == 1 {
+		return produceTarget{topic: topic}, true
+	}
+	if segments[1] != "partitions" || segments[2] == "" {
+		return produceTarget{}, false
+	}
+	partition, err := strconv.ParseInt(segments[2], 10, 32)
+	if err != nil || partition < 0 {
+		return produceTarget{}, false
+	}
+	partition32 := int32(partition)
+	return produceTarget{topic: topic, partition: &partition32}, true
 }
 
 func (h *Handler) authMiddleware(next http.Handler) http.Handler {
@@ -310,6 +386,20 @@ func (h *Handler) topicAllowed(topic string) bool {
 	return false
 }
 
+func (h *Handler) allowRequestRate(cost int64) bool {
+	if h.requestRateLimiter == nil {
+		return true
+	}
+	return h.requestRateLimiter.Allow(cost)
+}
+
+func (h *Handler) allowByteRate(cost int64) bool {
+	if h.byteRateLimiter == nil {
+		return true
+	}
+	return h.byteRateLimiter.Allow(cost)
+}
+
 func (cfg Config) withDefaults() Config {
 	if cfg.MaxRequestBytes <= 0 {
 		cfg.MaxRequestBytes = 8 * 1024 * 1024
@@ -332,6 +422,9 @@ func (cfg Config) withDefaults() Config {
 	if cfg.ProduceTimeout <= 0 {
 		cfg.ProduceTimeout = 30 * time.Second
 	}
+	if strings.TrimSpace(cfg.ClusterID) == "" {
+		cfg.ClusterID = "local"
+	}
 	return cfg
 }
 
@@ -343,4 +436,11 @@ func (cfg Config) decodeLimits() decodeLimits {
 		MaxHeaders:     cfg.MaxHeaders,
 		MaxHeaderBytes: cfg.MaxHeaderBytes,
 	}
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }

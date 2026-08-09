@@ -22,7 +22,23 @@ type Config struct {
 	RequestMaxHeaderBytes int64
 	TopicAllowlist        []string
 	AuthBearerTokens      []string
+	ClusterID             string
+	RateLimit             RateLimitConfig
+	SchemaRegistry        SchemaRegistryConfig
 	Kafka                 KafkaConfig
+}
+
+type RateLimitConfig struct {
+	RequestsPerSecond float64
+	RequestsBurst     int64
+	BytesPerSecond    float64
+	BytesBurst        int64
+}
+
+type SchemaRegistryConfig struct {
+	URL      string
+	Username string
+	Password string
 }
 
 type KafkaConfig struct {
@@ -43,6 +59,9 @@ type KafkaConfig struct {
 type TLSConfig struct {
 	Enable             bool
 	InsecureSkipVerify bool
+	CAFile             string
+	CertFile           string
+	KeyFile            string
 }
 
 type SASLConfig struct {
@@ -66,6 +85,18 @@ func LoadFromEnv() (Config, error) {
 		RequestMaxHeaderBytes: envInt64("REQUEST_MAX_HEADER_BYTES", 64*1024),
 		TopicAllowlist:        envCSV("TOPIC_ALLOWLIST"),
 		AuthBearerTokens:      envCSV("AUTH_BEARER_TOKENS"),
+		ClusterID:             envString("KAFKA_CLUSTER_ID", "local"),
+		RateLimit: RateLimitConfig{
+			RequestsPerSecond: envFloat("RATE_LIMIT_REQUESTS_PER_SECOND", 0),
+			RequestsBurst:     envInt64("RATE_LIMIT_REQUESTS_BURST", 0),
+			BytesPerSecond:    envFloat("RATE_LIMIT_BYTES_PER_SECOND", 0),
+			BytesBurst:        envInt64("RATE_LIMIT_BYTES_BURST", 0),
+		},
+		SchemaRegistry: SchemaRegistryConfig{
+			URL:      envString("SCHEMA_REGISTRY_URL", ""),
+			Username: envString("SCHEMA_REGISTRY_USERNAME", ""),
+			Password: envString("SCHEMA_REGISTRY_PASSWORD", ""),
+		},
 		Kafka: KafkaConfig{
 			Brokers:            envCSVDefault("KAFKA_BROKERS", []string{"localhost:9092"}),
 			ClientID:           envString("KAFKA_CLIENT_ID", "kafka-rest-proxy-go"),
@@ -80,6 +111,9 @@ func LoadFromEnv() (Config, error) {
 			TLS: TLSConfig{
 				Enable:             envBool("KAFKA_TLS_ENABLE", false),
 				InsecureSkipVerify: envBool("KAFKA_TLS_INSECURE_SKIP_VERIFY", false),
+				CAFile:             envString("KAFKA_TLS_CA_FILE", ""),
+				CertFile:           envString("KAFKA_TLS_CERT_FILE", ""),
+				KeyFile:            envString("KAFKA_TLS_KEY_FILE", ""),
 			},
 			SASL: SASLConfig{
 				Mechanism: envString("KAFKA_SASL_MECHANISM", ""),
@@ -110,11 +144,26 @@ func LoadFromEnv() (Config, error) {
 	if cfg.RequestMaxHeaderBytes <= 0 {
 		return Config{}, fmt.Errorf("REQUEST_MAX_HEADER_BYTES must be positive")
 	}
+	if cfg.RateLimit.RequestsPerSecond < 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_REQUESTS_PER_SECOND must be zero or positive")
+	}
+	if cfg.RateLimit.RequestsBurst < 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_REQUESTS_BURST must be zero or positive")
+	}
+	if cfg.RateLimit.BytesPerSecond < 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_BYTES_PER_SECOND must be zero or positive")
+	}
+	if cfg.RateLimit.BytesBurst < 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_BYTES_BURST must be zero or positive")
+	}
 	if cfg.Kafka.MaxBufferedRecords <= 0 {
 		return Config{}, fmt.Errorf("KAFKA_MAX_BUFFERED_RECORDS must be positive")
 	}
 	if cfg.Kafka.MaxBufferedBytes <= 0 {
 		return Config{}, fmt.Errorf("KAFKA_MAX_BUFFERED_BYTES must be positive")
+	}
+	if (cfg.Kafka.TLS.CertFile == "") != (cfg.Kafka.TLS.KeyFile == "") {
+		return Config{}, fmt.Errorf("KAFKA_TLS_CERT_FILE and KAFKA_TLS_KEY_FILE must be set together")
 	}
 	if cfg.Kafka.SASL.Mechanism != "" && (cfg.Kafka.SASL.Username == "" || cfg.Kafka.SASL.Password == "") {
 		return Config{}, fmt.Errorf("KAFKA_SASL_USERNAME and KAFKA_SASL_PASSWORD are required when KAFKA_SASL_MECHANISM is set")
@@ -189,6 +238,18 @@ func envInt64(name string, def int64) int64 {
 		return def
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func envFloat(name string, def float64) float64 {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseFloat(v, 64)
 	if err != nil {
 		return def
 	}

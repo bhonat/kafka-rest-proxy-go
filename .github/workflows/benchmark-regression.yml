@@ -1,0 +1,41 @@
+name: Benchmark regression
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.12"
+          cache: true
+      - name: Start Go and Confluent REST proxies
+        run: docker compose --profile comparison up --build -d
+      - name: Smoke test Go proxy
+        run: scripts/compose-smoke.sh
+      - name: Run comparison benchmark
+        run: make bench-regression
+      - name: Run short SLO-gated soak
+        run: make test-soak
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-regression
+          path: |
+            dist/benchmark-regression.html
+            coverage.out
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop Compose stack
+        if: always()
+        run: docker compose down -v --remove-orphans

@@ -1,0 +1,41 @@
+{
+  "name": "binary-partition-basic",
+  "request": {
+    "method": "POST",
+    "path": "/topics/binary-events/partitions/1",
+    "headers": {
+      "Content-Type": "application/vnd.kafka.binary.v2+json",
+      "Accept": "application/vnd.kafka.v2+json"
+    },
+    "body": {
+      "records": [
+        {
+          "key": "Y3VzdG9tZXItMQ==",
+          "value": "dmFsdWU="
+        }
+      ]
+    }
+  },
+  "producer_results": [
+    {
+      "partition": 1,
+      "offset": 101
+    }
+  ],
+  "expect": {
+    "status": 200,
+    "content_type": "application/vnd.kafka.v2+json",
+    "body": {
+      "offsets": [
+        {
+          "partition": 1,
+          "offset": 101,
+          "error_code": null,
+          "error": null
+        }
+      ],
+      "key_schema_id": null,
+      "value_schema_id": null
+    }
+  }
+}

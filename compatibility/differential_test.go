@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,7 +22,10 @@ const (
 	differentialConfluentEnv   = "KAFKA_REST_CONFLUENT_URL"
 	differentialTopicEnv       = "KAFKA_REST_DIFFERENTIAL_TOPIC"
 	differentialBinaryTopicEnv = "KAFKA_REST_DIFFERENTIAL_BINARY_TOPIC"
+	differentialClusterIDEnv   = "KAFKA_REST_DIFFERENTIAL_CLUSTER_ID"
 	differentialEdgeEnv        = "KAFKA_REST_DIFFERENTIAL_EDGE"
+	differentialSchemaEnv      = "KAFKA_REST_DIFFERENTIAL_SCHEMA"
+	differentialV3Env          = "KAFKA_REST_DIFFERENTIAL_V3"
 	differentialTimeoutEnv     = "KAFKA_REST_DIFFERENTIAL_TIMEOUT"
 )
 
@@ -59,10 +63,17 @@ func TestDifferentialProducerCompatibility(t *testing.T) {
 	confluentURL := envOrDefault(differentialConfluentEnv, "http://localhost:8082")
 	topic := envOrDefault(differentialTopicEnv, "orders")
 	binaryTopic := envOrDefault(differentialBinaryTopicEnv, "binary-events")
+	clusterID := envOrDefault(differentialClusterIDEnv, "MkU3OEVBNTcwNTJENDM2Qk")
 	timeout := envDurationOrDefault(differentialTimeoutEnv, 10*time.Second)
 
 	client := &http.Client{Timeout: timeout}
 	cases := differentialCases(topic, binaryTopic)
+	if os.Getenv(differentialV3Env) == "1" {
+		cases = append(cases, differentialV3Cases(topic, binaryTopic, clusterID)...)
+	}
+	if os.Getenv(differentialSchemaEnv) == "1" {
+		cases = append(cases, differentialSchemaCases()...)
+	}
 	if os.Getenv(differentialEdgeEnv) == "1" {
 		cases = append(cases, differentialEdgeCases(topic, binaryTopic)...)
 	}
@@ -145,7 +156,7 @@ func differentialCases(topic, binaryTopic string) []differentialCase {
 			headers:            jsonHeaders,
 			body:               `{"records":[{"partition":0,"key":"customer-123"}]}`,
 			compareContentType: true,
-			strict:             false,
+			strict:             true,
 		},
 		{
 			name:               "json-key-missing",
@@ -219,11 +230,29 @@ func differentialCases(topic, binaryTopic string) []differentialCase {
 			strict:             true,
 		},
 		{
+			name:               "json-partition-endpoint",
+			method:             http.MethodPost,
+			path:               "/topics/" + url.PathEscape(topic) + "/partitions/0",
+			headers:            jsonHeaders,
+			body:               `{"records":[{"key":"partition-key","value":{"ok":true}}]}`,
+			compareContentType: true,
+			strict:             true,
+		},
+		{
 			name:               "binary-success",
 			method:             http.MethodPost,
 			path:               "/topics/" + url.PathEscape(binaryTopic),
 			headers:            binaryHeaders,
 			body:               `{"records":[{"partition":0,"key":"Y3VzdG9tZXItMTIz","value":"aGVsbG8td29ybGQ="}]}`,
+			compareContentType: true,
+			strict:             true,
+		},
+		{
+			name:               "binary-partition-endpoint",
+			method:             http.MethodPost,
+			path:               "/topics/" + url.PathEscape(binaryTopic) + "/partitions/0",
+			headers:            binaryHeaders,
+			body:               `{"records":[{"key":"cGFydGl0aW9uLWtleQ==","value":"aGVsbG8td29ybGQ="}]}`,
 			compareContentType: true,
 			strict:             true,
 		},
@@ -348,6 +377,79 @@ func differentialEdgeCases(topic, binaryTopic string) []differentialCase {
 	}
 }
 
+func differentialV3Cases(topic, _ string, clusterID string) []differentialCase {
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"Accept":       "application/json",
+	}
+	recordsPath := "/v3/clusters/" + url.PathEscape(clusterID) + "/topics/" + url.PathEscape(topic) + "/records"
+	batchPath := recordsPath + ":batch"
+	return []differentialCase{
+		{
+			name:               "v3-records-stream-json-and-string",
+			method:             http.MethodPost,
+			path:               recordsPath,
+			headers:            headers,
+			body:               `{"partition_id":0,"value":{"type":"JSON","data":{"ok":true,"kind":"json"}}}{"partition_id":0,"value":{"type":"STRING","data":"second"}}`,
+			compareContentType: true,
+			strict:             true,
+		},
+		{
+			name:               "v3-records-batch-json-and-string",
+			method:             http.MethodPost,
+			path:               batchPath,
+			headers:            headers,
+			body:               `{"entries":[{"id":"a","partition_id":0,"value":{"type":"JSON","data":{"ok":true,"kind":"json"}}},{"id":"b","partition_id":0,"value":{"type":"STRING","data":"second"}}]}`,
+			compareContentType: true,
+			strict:             true,
+		},
+	}
+}
+
+func differentialSchemaCases() []differentialCase {
+	avroHeaders := map[string]string{
+		"Content-Type": "application/vnd.kafka.avro.v2+json",
+		"Accept":       "application/vnd.kafka.v2+json",
+	}
+	jsonSchemaHeaders := map[string]string{
+		"Content-Type": "application/vnd.kafka.jsonschema.v2+json",
+		"Accept":       "application/vnd.kafka.v2+json",
+	}
+	protobufHeaders := map[string]string{
+		"Content-Type": "application/vnd.kafka.protobuf.v2+json",
+		"Accept":       "application/vnd.kafka.v2+json",
+	}
+	return []differentialCase{
+		{
+			name:               "v2-avro-raw-schema",
+			method:             http.MethodPost,
+			path:               "/topics/integration-diff-avro",
+			headers:            avroHeaders,
+			body:               `{"value_schema":"{\"type\":\"record\",\"name\":\"DiffAvro\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"ok\",\"type\":\"boolean\"}]}","records":[{"partition":0,"value":{"id":"avro-1","ok":true}}]}`,
+			compareContentType: true,
+			strict:             true,
+		},
+		{
+			name:               "v2-jsonschema-raw-schema",
+			method:             http.MethodPost,
+			path:               "/topics/integration-diff-jsonschema",
+			headers:            jsonSchemaHeaders,
+			body:               `{"value_schema":"{\"title\":\"DiffJSONSchema\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"ok\":{\"type\":\"boolean\"}},\"required\":[\"id\",\"ok\"]}","records":[{"partition":0,"value":{"id":"jsonschema-1","ok":true}}]}`,
+			compareContentType: true,
+			strict:             true,
+		},
+		{
+			name:               "v2-protobuf-raw-schema",
+			method:             http.MethodPost,
+			path:               "/topics/integration-diff-protobuf",
+			headers:            protobufHeaders,
+			body:               `{"value_schema":"syntax = \"proto3\"; message DiffProto { string id = 1; bool ok = 2; }","records":[{"partition":0,"value":{"id":"protobuf-1","ok":true}}]}`,
+			compareContentType: true,
+			strict:             true,
+		},
+	}
+}
+
 func jsonProduceBatch(records int) string {
 	var b strings.Builder
 	b.WriteString(`{"records":[`)
@@ -402,13 +504,32 @@ func normalizeDifferentialResponse(resp differentialResponse, includeContentType
 		return out
 	}
 
-	var body any
-	if err := json.Unmarshal(resp.body, &body); err != nil {
+	body, err := decodeJSONDocuments(resp.body)
+	if err != nil {
 		out.BodyText = "<non-json>"
 		return out
 	}
 	out.Body = normalizeJSONValue(body)
 	return out
+}
+
+func decodeJSONDocuments(body []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	var docs []any
+	for {
+		var doc any
+		if err := dec.Decode(&doc); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		docs = append(docs, doc)
+	}
+	if len(docs) == 1 {
+		return docs[0], nil
+	}
+	return docs, nil
 }
 
 func normalizeJSONValue(v any) any {
@@ -420,6 +541,12 @@ func normalizeJSONValue(v any) any {
 			case "offset":
 				if v != nil {
 					out[k] = "<offset>"
+				} else {
+					out[k] = nil
+				}
+			case "timestamp":
+				if v != nil {
+					out[k] = "<timestamp>"
 				} else {
 					out[k] = nil
 				}

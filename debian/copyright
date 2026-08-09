@@ -1,0 +1,8 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: kafka-rest-proxy-go
+Source: https://example.com/kafka-rest-proxy-go
+
+Files: *
+Copyright: 2026 KafkaRestProxy-Go contributors
+License: Apache-2.0
+ See /usr/share/common-licenses/Apache-2.0.

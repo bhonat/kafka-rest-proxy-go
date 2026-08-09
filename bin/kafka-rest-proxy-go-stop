@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+pid_file="${KAFKA_REST_PROXY_GO_PID_FILE:-/var/run/kafka-rest-proxy-go.pid}"
+
+if [ -f "$pid_file" ]; then
+  pid="$(cat "$pid_file")"
+  if [ -n "$pid" ]; then
+    kill "$pid"
+    exit 0
+  fi
+fi
+
+echo "No pid file found at $pid_file; stop the service through systemd, Docker, or Kubernetes." >&2
+exit 1

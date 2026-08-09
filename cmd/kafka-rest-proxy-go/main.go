@@ -13,7 +13,10 @@ import (
 	"github.com/example/kafka-rest-proxy-go/internal/config"
 	"github.com/example/kafka-rest-proxy-go/internal/metrics"
 	franzproducer "github.com/example/kafka-rest-proxy-go/internal/producer/franz"
+	schemaproducer "github.com/example/kafka-rest-proxy-go/internal/schema"
 )
+
+var version = "dev"
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -49,7 +52,16 @@ func run(log *slog.Logger) error {
 		}
 	}()
 
-	handler := api.NewHandler(prod, m, api.Config{
+	registry, err := schemaproducer.NewHTTPRegistry(cfg.SchemaRegistry.URL, cfg.SchemaRegistry.Username, cfg.SchemaRegistry.Password)
+	if err != nil {
+		return err
+	}
+	var schemaEncoder *schemaproducer.Encoder
+	if registry != nil {
+		schemaEncoder = schemaproducer.NewEncoder(registry)
+	}
+
+	handler := api.NewHandlerWithSchema(prod, m, api.Config{
 		MaxRequestBytes: cfg.RequestMaxBytes,
 		MaxRecords:      cfg.RequestMaxRecords,
 		MaxRecordBytes:  cfg.RequestMaxRecordBytes,
@@ -60,7 +72,13 @@ func run(log *slog.Logger) error {
 		ProduceTimeout:  cfg.ProduceTimeout,
 		BearerTokens:    cfg.AuthBearerTokens,
 		PprofEnable:     cfg.PprofEnable,
-	}, log)
+		ClusterID:       cfg.ClusterID,
+
+		RateLimitRequestsPerSecond: cfg.RateLimit.RequestsPerSecond,
+		RateLimitRequestsBurst:     cfg.RateLimit.RequestsBurst,
+		RateLimitBytesPerSecond:    cfg.RateLimit.BytesPerSecond,
+		RateLimitBytesBurst:        cfg.RateLimit.BytesBurst,
+	}, log, schemaEncoder)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -70,7 +88,7 @@ func run(log *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("starting kafka-rest-proxy-go", "addr", cfg.HTTPAddr, "brokers", cfg.Kafka.Brokers)
+		log.Info("starting kafka-rest-proxy-go", "version", version, "addr", cfg.HTTPAddr, "brokers", cfg.Kafka.Brokers)
 		errCh <- srv.ListenAndServe()
 	}()
 

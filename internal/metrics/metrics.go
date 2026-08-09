@@ -29,6 +29,7 @@ type Metrics struct {
 	decodeLatency   metric.Float64Histogram
 	callbackWait    metric.Float64Histogram
 	rejections      metric.Int64Counter
+	rateRejections  metric.Int64Counter
 
 	outstandingRequests atomic.Int64
 	admissionSnapshot   func() (usedRecords, maxRecords, usedBytes, maxBytes int64)
@@ -147,6 +148,12 @@ func New() (*Metrics, error) {
 	); err != nil {
 		return nil, err
 	}
+	if m.rateRejections, err = meter.Int64Counter(
+		"kafka_rest_rate_limit_rejections",
+		metric.WithDescription("Requests rejected by configured request or byte rate limits."),
+	); err != nil {
+		return nil, err
+	}
 
 	if _, err = meter.Int64ObservableGauge(
 		"kafka_rest_outstanding_requests",
@@ -257,6 +264,10 @@ func (m *Metrics) ObserveKafkaCallbackWait(status int, duration time.Duration) {
 
 func (m *Metrics) ObserveAdmissionRejected() {
 	m.rejections.Add(context.Background(), 1)
+}
+
+func (m *Metrics) ObserveRateLimitRejected(kind string) {
+	m.rateRejections.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", kind)))
 }
 
 func (m *Metrics) IncOutstanding() {

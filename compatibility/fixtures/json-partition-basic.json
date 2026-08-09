@@ -1,0 +1,43 @@
+{
+  "name": "json-partition-basic",
+  "request": {
+    "method": "POST",
+    "path": "/topics/orders/partitions/2",
+    "headers": {
+      "Content-Type": "application/vnd.kafka.json.v2+json",
+      "Accept": "application/vnd.kafka.v2+json"
+    },
+    "body": {
+      "records": [
+        {
+          "key": "customer-1",
+          "value": {
+            "order_id": "order-1"
+          }
+        }
+      ]
+    }
+  },
+  "producer_results": [
+    {
+      "partition": 2,
+      "offset": 100
+    }
+  ],
+  "expect": {
+    "status": 200,
+    "content_type": "application/vnd.kafka.v2+json",
+    "body": {
+      "offsets": [
+        {
+          "partition": 2,
+          "offset": 100,
+          "error_code": null,
+          "error": null
+        }
+      ],
+      "key_schema_id": null,
+      "value_schema_id": null
+    }
+  }
+}

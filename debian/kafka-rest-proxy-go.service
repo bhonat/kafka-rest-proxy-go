@@ -1,0 +1,21 @@
+[Unit]
+Description=KafkaRestProxy-Go producer REST proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/kafka-rest-proxy-go/kafka-rest-proxy-go.env
+ExecStart=/usr/bin/kafka-rest-proxy-go
+Restart=on-failure
+RestartSec=5
+User=kafka-rest-proxy-go
+Group=kafka-rest-proxy-go
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/kafka-rest-proxy-go /var/log/kafka-rest-proxy-go
+
+[Install]
+WantedBy=multi-user.target

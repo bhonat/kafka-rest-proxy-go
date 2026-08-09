@@ -3,7 +3,9 @@ package franz
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,10 +49,11 @@ func New(cfg config.KafkaConfig) (*Producer, error) {
 	}
 
 	if cfg.TLS.Enable {
-		opts = append(opts, kgo.DialTLSConfig(&tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: cfg.TLS.InsecureSkipVerify, //nolint:gosec // explicit config knob for non-prod clusters.
-		}))
+		tlsConfig, err := newTLSConfig(cfg.TLS)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
 	}
 
 	mech, err := saslMechanism(cfg.SASL)
@@ -243,6 +246,38 @@ func compressionPreference(v string) ([]kgo.CompressionCodec, error) {
 	default:
 		return nil, fmt.Errorf("unsupported KAFKA_COMPRESSION %q", v)
 	}
+}
+
+func newTLSConfig(cfg config.TLSConfig) (*tls.Config, error) {
+	tlsConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: cfg.InsecureSkipVerify, //nolint:gosec // explicit config knob for non-prod clusters.
+	}
+
+	if cfg.CAFile != "" {
+		pem, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read KAFKA_TLS_CA_FILE: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if ok := roots.AppendCertsFromPEM(pem); !ok {
+			return nil, fmt.Errorf("KAFKA_TLS_CA_FILE did not contain any PEM certificates")
+		}
+		tlsConfig.RootCAs = roots
+	}
+
+	if cfg.CertFile != "" || cfg.KeyFile != "" {
+		if cfg.CertFile == "" || cfg.KeyFile == "" {
+			return nil, fmt.Errorf("KAFKA_TLS_CERT_FILE and KAFKA_TLS_KEY_FILE must be set together")
+		}
+		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load Kafka TLS client certificate: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+
+	return tlsConfig, nil
 }
 
 func saslMechanism(cfg config.SASLConfig) (sasl.Mechanism, error) {

@@ -1,0 +1,241 @@
+openapi: 3.1.0
+info:
+  title: KafkaRestProxy-Go v3 Producer API
+  version: 0.1.0
+  description: |
+    Producer-only subset of the Confluent Kafka REST v3 Records API.
+    Consumer, admin, ACL, cluster, broker, replica, and config APIs are not
+    implemented by this service.
+paths:
+  /v3/clusters/{cluster_id}/topics/{topic_name}/records:
+    post:
+      operationId: produceRecord
+      summary: Produce records
+      description: |
+        Produces one or more concatenated JSON record objects. Each successful
+        connection returns HTTP 200 and one delivery report per submitted record.
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/TopicName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProduceRequest"
+      responses:
+        "200":
+          description: Per-record delivery report stream.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProduceResponse"
+  /v3/clusters/{cluster_id}/topics/{topic_name}/records:batch:
+    post:
+      operationId: produceRecordsBatch
+      summary: Produce records batch
+      description: Produces a batch of records and returns successes and failures.
+      parameters:
+        - $ref: "#/components/parameters/ClusterId"
+        - $ref: "#/components/parameters/TopicName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProduceBatchRequest"
+      responses:
+        "207":
+          description: Multi-status batch delivery reports.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProduceBatchResponse"
+components:
+  parameters:
+    ClusterId:
+      name: cluster_id
+      in: path
+      required: true
+      schema:
+        type: string
+    TopicName:
+      name: topic_name
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    ProduceRequest:
+      type: object
+      properties:
+        partition_id:
+          type: integer
+          format: int32
+          nullable: true
+        headers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Header"
+        key:
+          $ref: "#/components/schemas/ProduceRequestData"
+        value:
+          $ref: "#/components/schemas/ProduceRequestData"
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+    ProduceBatchRequest:
+      type: object
+      required:
+        - entries
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProduceBatchRequestEntry"
+    ProduceBatchRequestEntry:
+      allOf:
+        - type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              minLength: 1
+              maxLength: 80
+        - $ref: "#/components/schemas/ProduceRequest"
+    ProduceRequestData:
+      type: object
+      nullable: true
+      properties:
+        type:
+          type: string
+          enum: [BINARY, JSON, STRING, AVRO, JSONSCHEMA, PROTOBUF]
+        subject:
+          type: string
+          nullable: true
+        subject_name_strategy:
+          type: string
+          enum: [TOPIC_NAME, RECORD_NAME, TOPIC_RECORD_NAME]
+          nullable: true
+        schema_id:
+          type: integer
+          nullable: true
+        schema_version:
+          type: integer
+          nullable: true
+        schema:
+          type: string
+          nullable: true
+        data: {}
+    Header:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+          format: byte
+          nullable: true
+    ProduceResponse:
+      type: object
+      required:
+        - error_code
+      properties:
+        error_code:
+          type: integer
+          format: int32
+        message:
+          type: string
+        cluster_id:
+          type: string
+        topic_name:
+          type: string
+        partition_id:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        key:
+          $ref: "#/components/schemas/ProduceResponseData"
+        value:
+          $ref: "#/components/schemas/ProduceResponseData"
+    ProduceResponseData:
+      type: object
+      nullable: true
+      required:
+        - size
+        - type
+      properties:
+        size:
+          type: integer
+          format: int64
+        type:
+          type: string
+          enum: [BINARY, JSON, STRING, AVRO, JSONSCHEMA, PROTOBUF]
+        subject:
+          type: string
+          nullable: true
+        schema_id:
+          type: integer
+          nullable: true
+        schema_version:
+          type: integer
+          nullable: true
+    ProduceBatchResponse:
+      type: object
+      properties:
+        successes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProduceBatchResponseSuccessEntry"
+        failures:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProduceBatchResponseFailureEntry"
+    ProduceBatchResponseSuccessEntry:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+        cluster_id:
+          type: string
+        topic_name:
+          type: string
+        partition_id:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int64
+        timestamp:
+          type: string
+          format: date-time
+          nullable: true
+        key:
+          $ref: "#/components/schemas/ProduceResponseData"
+        value:
+          $ref: "#/components/schemas/ProduceResponseData"
+    ProduceBatchResponseFailureEntry:
+      type: object
+      required:
+        - id
+        - error_code
+      properties:
+        id:
+          type: string
+        error_code:
+          type: integer
+          format: int32
+        message:
+          type: string

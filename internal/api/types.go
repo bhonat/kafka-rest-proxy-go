@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/example/kafka-rest-proxy-go/internal/producer"
+	schemaproducer "github.com/example/kafka-rest-proxy-go/internal/schema"
 )
 
 type nullableRaw struct {
@@ -23,7 +25,11 @@ func (n *nullableRaw) UnmarshalJSON(b []byte) error {
 }
 
 type rawProduceRequest struct {
-	Records []rawRecord `json:"records"`
+	KeySchemaID   *int        `json:"key_schema_id"`
+	KeySchema     string      `json:"key_schema"`
+	ValueSchemaID *int        `json:"value_schema_id"`
+	ValueSchema   string      `json:"value_schema"`
+	Records       []rawRecord `json:"records"`
 }
 
 type rawRecord struct {
@@ -64,44 +70,80 @@ type errorResponse struct {
 	Message   string `json:"message"`
 }
 
-func decodeProduceRequest(topic string, body []byte, format payloadFormat, limits decodeLimits) ([]producer.Record, error) {
+type schemaEncoder interface {
+	Encode(ctx context.Context, topic string, key bool, data *schemaproducer.RequestData) ([]byte, schemaproducer.Metadata, error)
+}
+
+type produceMetadata struct {
+	KeySchemaID   *int
+	ValueSchemaID *int
+}
+
+func decodeProduceRequest(topic string, body []byte, format payloadFormat, limits decodeLimits, forcedPartition ...*int32) ([]producer.Record, error) {
+	records, _, err := decodeProduceRequestWithSchema(context.Background(), topic, body, format, limits, nil, forcedPartition...)
+	return records, err
+}
+
+func decodeProduceRequestWithSchema(ctx context.Context, topic string, body []byte, format payloadFormat, limits decodeLimits, enc schemaEncoder, forcedPartition ...*int32) ([]producer.Record, produceMetadata, error) {
 	limits = limits.withDefaults()
+	var pathPartition *int32
+	if len(forcedPartition) > 0 {
+		pathPartition = forcedPartition[0]
+	}
 
 	var req rawProduceRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, validationError{message: err.Error()}
+		return nil, produceMetadata{}, validationError{message: err.Error()}
 	}
 	if req.Records == nil {
-		return nil, validationError{message: "request body must include records"}
+		return nil, produceMetadata{}, unprocessableError{message: "request body must include records"}
+	}
+	if len(req.Records) == 0 {
+		return nil, produceMetadata{}, unprocessableError{message: "records must not be empty"}
 	}
 	if len(req.Records) > limits.MaxRecords {
-		return nil, validationError{message: fmt.Sprintf("too many records: got %d, limit %d", len(req.Records), limits.MaxRecords)}
+		return nil, produceMetadata{}, validationError{message: fmt.Sprintf("too many records: got %d, limit %d", len(req.Records), limits.MaxRecords)}
 	}
 
+	meta := produceMetadata{}
 	records := make([]producer.Record, 0, len(req.Records))
 	for i, rr := range req.Records {
-		key, err := decodeNullableValue(rr.Key, format)
+		key, keyMeta, err := decodeV2NullableValue(ctx, topic, true, rr.Key, format, req.KeySchemaID, req.KeySchema, enc)
 		if err != nil {
 			var be binaryDecodeError
 			if errors.As(err, &be) {
-				return nil, validationError{message: be.Error()}
+				return nil, meta, validationError{message: be.Error()}
 			}
-			return nil, validationError{message: fmt.Sprintf("records[%d].key: %v", i, err)}
+			return nil, meta, validationError{message: fmt.Sprintf("records[%d].key: %v", i, err)}
 		}
-		value, err := decodeNullableValue(rr.Value, format)
+		if meta.KeySchemaID == nil {
+			meta.KeySchemaID = keyMeta.SchemaID
+		}
+		value, valueMeta, err := decodeV2NullableValue(ctx, topic, false, rr.Value, format, req.ValueSchemaID, req.ValueSchema, enc)
 		if err != nil {
 			var be binaryDecodeError
 			if errors.As(err, &be) {
-				return nil, validationError{message: be.Error()}
+				return nil, meta, validationError{message: be.Error()}
 			}
-			return nil, validationError{message: fmt.Sprintf("records[%d].value: %v", i, err)}
+			return nil, meta, validationError{message: fmt.Sprintf("records[%d].value: %v", i, err)}
+		}
+		if meta.ValueSchemaID == nil {
+			meta.ValueSchemaID = valueMeta.SchemaID
 		}
 		headers, err := decodeHeaders(rr.Headers, format, limits)
 		if err != nil {
-			return nil, validationError{message: fmt.Sprintf("records[%d].headers: %v", i, err)}
+			return nil, meta, validationError{message: fmt.Sprintf("records[%d].headers: %v", i, err)}
 		}
 		if int64(len(key)) > limits.MaxKeyBytes {
-			return nil, validationError{message: fmt.Sprintf("records[%d].key exceeds configured size limit", i)}
+			return nil, meta, validationError{message: fmt.Sprintf("records[%d].key exceeds configured size limit", i)}
+		}
+		partition := rr.Partition
+		if pathPartition != nil {
+			p := *pathPartition
+			partition = &p
+		}
+		if pathPartition == nil && rr.Partition != nil && *rr.Partition < 0 {
+			return nil, meta, validationError{message: fmt.Sprintf("records[%d].partition must be non-negative", i)}
 		}
 
 		record := producer.Record{
@@ -109,16 +151,38 @@ func decodeProduceRequest(topic string, body []byte, format payloadFormat, limit
 			Key:       key,
 			Value:     value,
 			Headers:   headers,
-			Partition: rr.Partition,
+			Partition: partition,
 		}
 		if record.SizeBytes() > limits.MaxRecordBytes {
-			return nil, validationError{message: fmt.Sprintf("records[%d] exceeds configured record size limit", i)}
+			return nil, meta, validationError{message: fmt.Sprintf("records[%d] exceeds configured record size limit", i)}
 		}
 
 		records = append(records, record)
 	}
 
-	return records, nil
+	return records, meta, nil
+}
+
+func decodeV2NullableValue(ctx context.Context, topic string, key bool, v nullableRaw, format payloadFormat, schemaID *int, schemaText string, enc schemaEncoder) ([]byte, schemaproducer.Metadata, error) {
+	schemaType := format.schemaType()
+	if schemaType == "" {
+		value, err := decodeNullableValue(v, format)
+		return value, schemaproducer.Metadata{}, err
+	}
+	if enc == nil {
+		return nil, schemaproducer.Metadata{}, fmt.Errorf("schema registry is required for %s payloads", format.String())
+	}
+	data := &schemaproducer.RequestData{
+		Type:        schemaType,
+		SchemaID:    schemaID,
+		Schema:      schemaText,
+		Data:        v.Raw,
+		DataPresent: v.Present,
+	}
+	if schemaID != nil {
+		data.SubjectNameStrategy = schemaproducer.StrategyTopicName
+	}
+	return enc.Encode(ctx, topic, key, data)
 }
 
 func decodeHeaders(headers []rawHeader, format payloadFormat, limits decodeLimits) ([]producer.Header, error) {
@@ -241,36 +305,7 @@ func isJSONNull(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
-func responseFromResults(results []producer.Result) produceResponse {
-	resp := produceResponse{Offsets: make([]produceOffset, len(results))}
-	for i, r := range results {
-		if resultFailed(r) {
-			code := confluentKafkaRecordErrorCode
-			if r.ErrorCode != nil {
-				code = *r.ErrorCode
-			}
-			errText := "Kafka produce failed"
-			if r.Err != nil {
-				errText = r.Err.Error()
-			}
-			resp.Offsets[i] = produceOffset{
-				ErrorCode: &code,
-				Error:     &errText,
-			}
-			continue
-		}
-
-		partition := r.Partition
-		offset := r.Offset
-		resp.Offsets[i] = produceOffset{
-			Partition: &partition,
-			Offset:    &offset,
-		}
-	}
-	return resp
-}
-
-func appendProduceResponse(dst []byte, results []producer.Result) []byte {
+func appendProduceResponse(dst []byte, results []producer.Result, meta produceMetadata) []byte {
 	if dst == nil {
 		dst = make([]byte, 0, 64+(len(results)*64))
 	}
@@ -302,9 +337,21 @@ func appendProduceResponse(dst []byte, results []producer.Result) []byte {
 		}
 		dst = append(dst, '}')
 	}
-	dst = append(dst, `],"key_schema_id":null,"value_schema_id":null}`...)
+	dst = append(dst, `],"key_schema_id":`...)
+	appendNullableInt(&dst, meta.KeySchemaID)
+	dst = append(dst, `,"value_schema_id":`...)
+	appendNullableInt(&dst, meta.ValueSchemaID)
+	dst = append(dst, '}')
 	dst = append(dst, '\n')
 	return dst
+}
+
+func appendNullableInt(dst *[]byte, value *int) {
+	if value == nil {
+		*dst = append(*dst, `null`...)
+		return
+	}
+	*dst = strconv.AppendInt(*dst, int64(*value), 10)
 }
 
 func countResultStatus(results []producer.Result) (successes, failures int) {
