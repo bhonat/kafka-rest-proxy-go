@@ -33,3 +33,17 @@ make test-load-integration
 ```
 
 For CI/manual workflow runs, see `.github/workflows/benchmark-regression.yml`.
+
+## Public benchmark dashboard
+
+The `Benchmark regression` GitHub Actions workflow publishes the latest
+sanitized comparison report to GitHub Pages:
+
+```text
+https://bhonat.github.io/kafka-rest-proxy-go/
+```
+
+The workflow runs the benchmark, copies `dist/benchmark-regression.html` to the
+Pages artifact, and blocks publication if the report contains local paths, email
+addresses, or workstation/user identifiers. GitHub Pages should be configured to
+use GitHub Actions as the source.

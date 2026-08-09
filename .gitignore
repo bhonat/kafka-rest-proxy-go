@@ -11,3 +11,4 @@ coverage.out
 .gomodcache/
 vendor/
 testing/secrets/generated/
+public/

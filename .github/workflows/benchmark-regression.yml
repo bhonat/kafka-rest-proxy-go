@@ -7,11 +7,20 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: benchmark-pages
+  cancel-in-progress: false
 
 jobs:
   benchmark-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -26,13 +35,28 @@ jobs:
         run: make bench-regression
       - name: Run short SLO-gated soak
         run: make test-soak
+      - name: Prepare sanitized benchmark page
+        run: scripts/prepare-benchmark-pages.sh dist/benchmark-regression.html public
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: benchmark-regression
           path: |
             dist/benchmark-regression.html
+            public/index.html
             coverage.out
+      - name: Configure GitHub Pages
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v5
+      - name: Upload GitHub Pages artifact
+        if: success() && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - name: Deploy benchmark dashboard
+        if: success() && github.ref == 'refs/heads/main'
+        id: deployment
+        uses: actions/deploy-pages@v4
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --no-color
