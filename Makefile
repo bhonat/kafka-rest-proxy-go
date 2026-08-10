@@ -3,7 +3,7 @@ GO_PATCHED_TOOLCHAIN ?= go1.25.12
 export GOCACHE ?= /tmp/kafka-rest-proxy-go-gocache
 export GOMODCACHE ?= /tmp/kafka-rest-proxy-go-gomodcache
 
-.PHONY: test fmt-check vet coverage govulncheck staticcheck quality openapi-check licenses-check generate-licenses prepare-security-secrets test-race test-integration test-failure-integration test-cluster-integration test-differential test-differential-full test-schema-registry-integration test-security-integration test-sasl-ssl-integration test-mtls-integration test-acl-integration test-load-integration test-hardening test-soak build build-release generate-sbom sign-release run tidy docker-build compose-up compose-up-cluster compose-up-comparison compose-up-schema-registry compose-up-security compose-up-sasl-ssl compose-up-mtls compose-up-acl compose-down compose-down-cluster compose-down-security compose-smoke bench-produce bench-html bench-suite bench-compare bench-regression capture-confluent-fixtures prepare-benchmark-pages otel-metrics
+.PHONY: test fmt-check vet coverage govulncheck staticcheck quality openapi-check licenses-check generate-licenses prepare-security-secrets test-race test-integration test-failure-integration test-cluster-integration test-differential test-differential-full test-schema-registry-integration test-security-integration test-sasl-ssl-integration test-mtls-integration test-acl-integration test-load-integration test-hardening test-soak build build-release generate-sbom sign-release run tidy docker-build compose-up compose-up-cluster compose-up-comparison compose-up-schema-registry compose-up-security compose-up-sasl-ssl compose-up-mtls compose-up-acl compose-down compose-down-cluster compose-down-security compose-smoke bench-produce bench-html bench-suite bench-compare bench-pages bench-regression capture-confluent-fixtures prepare-benchmark-pages otel-metrics
 
 test:
 	go test ./...
@@ -150,6 +150,9 @@ bench-suite:
 
 bench-compare:
 	go run ./cmd/bench-produce -suite -target go=http://localhost:8080 -target confluent=http://localhost:8082 -topic orders -duration 5s -payload-sizes 128,512,1KiB -records-per-request 1,10,100 -client-counts 4,16 -html dist/benchmark-comparison.html
+
+bench-pages:
+	go run ./cmd/bench-produce -suite -target go=http://localhost:8080 -target confluent=http://localhost:8082 -topic orders -duration 3s -payload-sizes 128,512,1KiB -records-per-request 1,10,100 -client-counts 4,16 -formats json,binary -html dist/benchmark-regression.html
 
 bench-regression:
 	go run ./cmd/bench-produce -suite -target go=http://localhost:8080 -target confluent=http://localhost:8082 -topic orders -duration 30s -payload-sizes 128,512,1KiB,10KiB -records-per-request 1,10,100 -client-counts 4,16,64 -formats json,binary -html dist/benchmark-regression.html

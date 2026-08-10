@@ -32,11 +32,11 @@ jobs:
       - name: Smoke test Go proxy
         run: scripts/compose-smoke.sh
       - name: Run comparison benchmark
-        run: make bench-regression
+        run: make bench-pages
       - name: Run short SLO-gated soak
         run: make test-soak
       - name: Prepare sanitized benchmark page
-        run: scripts/prepare-benchmark-pages.sh dist/benchmark-regression.html public
+        run: make prepare-benchmark-pages
       - uses: actions/upload-artifact@v4
         if: always()
         with:
