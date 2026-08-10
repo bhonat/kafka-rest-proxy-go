@@ -171,21 +171,44 @@ func TestEvaluateThresholdsReportsAllFailures(t *testing.T) {
 
 func TestCountRecordResults(t *testing.T) {
 	body := []byte(`{"offsets":[{"partition":0,"offset":10,"error_code":null,"error":null},{"partition":0,"offset":null,"error_code":50002,"error":"boom"}]}`)
-	success, failed, err := countRecordResults(body, 2)
+	success, failed, reason, err := countRecordResults(body, 2)
 	if err != nil {
 		t.Fatalf("countRecordResults: %v", err)
 	}
 	if success != 1 || failed != 1 {
 		t.Fatalf("success=%d failed=%d", success, failed)
 	}
+	if reason != "record_error_code_50002" {
+		t.Fatalf("reason = %q", reason)
+	}
 }
 
 func TestCountRecordResultsRejectsBadShape(t *testing.T) {
-	_, _, err := countRecordResults([]byte(`{"offsets":[]}`), 1)
+	_, _, _, err := countRecordResults([]byte(`{"offsets":[]}`), 1)
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !strings.Contains(err.Error(), "offsets length") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFailureBreakdownIsSortedAndBounded(t *testing.T) {
+	got := topFailureReasons(map[string]int64{
+		"record_error":    2,
+		"http_status_503": 5,
+		"client_error":    5,
+	}, 2)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Reason != "client_error" || got[0].Count != 5 {
+		t.Fatalf("first = %+v", got[0])
+	}
+	if got[1].Reason != "http_status_503" || got[1].Count != 5 {
+		t.Fatalf("second = %+v", got[1])
+	}
+	if formatted := formatFailureBreakdown(got); formatted != "client_error:5,http_status_503:5" {
+		t.Fatalf("formatted = %q", formatted)
 	}
 }

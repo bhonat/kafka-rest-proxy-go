@@ -64,6 +64,12 @@ type requestResult struct {
 	Bytes          int64
 	Latency        time.Duration
 	Err            error
+	FailureReason  string
+}
+
+type failureCount struct {
+	Reason string
+	Count  int64
 }
 
 type summary struct {
@@ -90,6 +96,7 @@ type summary struct {
 	P95                time.Duration
 	P99                time.Duration
 	LatencySamples     int
+	FailureBreakdown   []failureCount
 }
 
 type violation struct {
@@ -224,6 +231,8 @@ func parseOptions(args []string) (options, error) {
 }
 
 func runSoak(opts options, body []byte) summary {
+	client, closeClient := newSoakHTTPClient(opts)
+	defer closeClient()
 	results := make(chan requestResult, opts.Clients*4)
 	var wg sync.WaitGroup
 	stop := time.NewTimer(opts.Duration)
@@ -240,7 +249,6 @@ func runSoak(opts options, body []byte) summary {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			client := &http.Client{Timeout: opts.Timeout}
 			for {
 				select {
 				case <-done:
@@ -260,6 +268,7 @@ func runSoak(opts options, body []byte) summary {
 	latencies := make([]time.Duration, 0, minInt(opts.MaxLatencySamples, 100_000))
 	var totalRequests, successRequests, failedRequests int64
 	var attemptedRecords, successRecords, failedRecords, requestBytes int64
+	failureReasons := map[string]int64{}
 
 	for res := range results {
 		totalRequests++
@@ -269,6 +278,11 @@ func runSoak(opts options, body []byte) summary {
 		requestBytes += res.Bytes
 		if res.Err != nil || res.Status < 200 || res.Status >= 300 || res.FailedRecords > 0 {
 			failedRequests++
+			reason := res.FailureReason
+			if reason == "" {
+				reason = "unknown_failure"
+			}
+			failureReasons[reason]++
 		} else {
 			successRequests++
 		}
@@ -278,7 +292,25 @@ func runSoak(opts options, body []byte) summary {
 	}
 
 	elapsed := time.Since(start)
-	return summarize(opts, elapsed, totalRequests, successRequests, failedRequests, attemptedRecords, successRecords, failedRecords, requestBytes, latencies)
+	return summarize(opts, elapsed, totalRequests, successRequests, failedRequests, attemptedRecords, successRecords, failedRecords, requestBytes, latencies, failureReasons)
+}
+
+func newSoakHTTPClient(opts options) (*http.Client, func()) {
+	maxConns := opts.Clients * 4
+	if maxConns < 32 {
+		maxConns = 32
+	}
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          maxConns,
+		MaxIdleConnsPerHost:   maxConns,
+		MaxConnsPerHost:       maxConns,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: opts.Timeout,
+		ExpectContinueTimeout: time.Second,
+	}
+	return &http.Client{Timeout: opts.Timeout, Transport: transport}, transport.CloseIdleConnections
 }
 
 func postOnce(client *http.Client, opts options, body []byte) requestResult {
@@ -289,29 +321,29 @@ func postOnce(client *http.Client, opts options, body []byte) requestResult {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
-		return requestResult{Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: time.Since(start), Err: err}
+		return requestResult{Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: time.Since(start), Err: err, FailureReason: "request_build_error"}
 	}
 	req.Header.Set("Content-Type", contentTypeForFormat(opts.Format))
 	req.Header.Set("Accept", "application/vnd.kafka.v2+json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return requestResult{Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: time.Since(start), Err: err}
+		return requestResult{Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: time.Since(start), Err: err, FailureReason: classifyClientError(err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, readErr := io.ReadAll(resp.Body)
 	latency := time.Since(start)
 	if readErr != nil {
-		return requestResult{Status: resp.StatusCode, Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: latency, Err: readErr}
+		return requestResult{Status: resp.StatusCode, Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: latency, Err: readErr, FailureReason: "response_read_error"}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return requestResult{Status: resp.StatusCode, Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: latency}
+		return requestResult{Status: resp.StatusCode, Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: latency, FailureReason: "http_status_" + strconv.Itoa(resp.StatusCode)}
 	}
 
-	success, failed, err := countRecordResults(respBody, opts.RecordsPerRequest)
+	success, failed, reason, err := countRecordResults(respBody, opts.RecordsPerRequest)
 	if err != nil {
-		return requestResult{Status: resp.StatusCode, Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: latency, Err: err}
+		return requestResult{Status: resp.StatusCode, Records: int64(opts.RecordsPerRequest), FailedRecords: int64(opts.RecordsPerRequest), Bytes: int64(len(body)), Latency: latency, Err: err, FailureReason: classifyResponseError(err)}
 	}
 	return requestResult{
 		Status:         resp.StatusCode,
@@ -320,28 +352,32 @@ func postOnce(client *http.Client, opts options, body []byte) requestResult {
 		FailedRecords:  int64(failed),
 		Bytes:          int64(len(body)),
 		Latency:        latency,
+		FailureReason:  reason,
 	}
 }
 
-func countRecordResults(body []byte, expectedRecords int) (success int, failed int, err error) {
+func countRecordResults(body []byte, expectedRecords int) (success int, failed int, failureReason string, err error) {
 	var decoded produceResponse
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return 0, 0, fmt.Errorf("decode produce response: %w", err)
+		return 0, 0, "", fmt.Errorf("decode produce response: %w", err)
 	}
 	if len(decoded.Offsets) != expectedRecords {
-		return 0, 0, fmt.Errorf("produce response offsets length %d does not match records %d", len(decoded.Offsets), expectedRecords)
+		return 0, 0, "", fmt.Errorf("produce response offsets length %d does not match records %d", len(decoded.Offsets), expectedRecords)
 	}
 	for _, offset := range decoded.Offsets {
 		if offset.ErrorCode != nil || (offset.Error != nil && *offset.Error != "") {
 			failed++
+			if failureReason == "" {
+				failureReason = recordFailureReason(offset)
+			}
 			continue
 		}
 		success++
 	}
-	return success, failed, nil
+	return success, failed, failureReason, nil
 }
 
-func summarize(opts options, elapsed time.Duration, totalRequests, successRequests, failedRequests, attemptedRecords, successRecords, failedRecords, requestBytes int64, latencies []time.Duration) summary {
+func summarize(opts options, elapsed time.Duration, totalRequests, successRequests, failedRequests, attemptedRecords, successRecords, failedRecords, requestBytes int64, latencies []time.Duration, failureReasons map[string]int64) summary {
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	elapsedSeconds := elapsed.Seconds()
 	if elapsedSeconds <= 0 {
@@ -381,6 +417,7 @@ func summarize(opts options, elapsed time.Duration, totalRequests, successReques
 		P95:                percentile(latencies, 0.95),
 		P99:                percentile(latencies, 0.99),
 		LatencySamples:     len(latencies),
+		FailureBreakdown:   topFailureReasons(failureReasons, 8),
 	}
 }
 
@@ -443,6 +480,9 @@ func printSummary(result summary, limits thresholds, violations []violation) {
 		limits.MinRecordsPerSecond,
 		limits.MaxP99,
 	)
+	if len(result.FailureBreakdown) > 0 {
+		fmt.Printf("failure_breakdown=%s\n", formatFailureBreakdown(result.FailureBreakdown))
+	}
 	for _, v := range violations {
 		fmt.Printf("violation=%s actual=%s threshold=%s\n", v.Name, v.Actual, v.Threshold)
 	}
@@ -464,6 +504,83 @@ func buildBody(records, payloadBytes int, format string) ([]byte, error) {
 		req.Records[i] = produceRecord{Value: value}
 	}
 	return json.Marshal(req)
+}
+
+func classifyClientError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "client_timeout"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection reset"):
+		return "client_connection_reset"
+	case strings.Contains(msg, "connection refused"):
+		return "client_connection_refused"
+	case strings.Contains(msg, "eof"):
+		return "client_eof"
+	case strings.Contains(msg, "broken pipe"):
+		return "client_broken_pipe"
+	case strings.Contains(msg, "timeout"):
+		return "client_timeout"
+	default:
+		return "client_error"
+	}
+}
+
+func classifyResponseError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "decode produce response"):
+		return "response_decode_error"
+	case strings.Contains(msg, "offsets length"):
+		return "response_offsets_length_mismatch"
+	default:
+		return "response_error"
+	}
+}
+
+func recordFailureReason(offset produceOffset) string {
+	if offset.ErrorCode != nil {
+		return "record_error_code_" + strconv.Itoa(*offset.ErrorCode)
+	}
+	if offset.Error != nil && *offset.Error != "" {
+		return "record_error"
+	}
+	return "record_error_unknown"
+}
+
+func topFailureReasons(reasons map[string]int64, limit int) []failureCount {
+	if len(reasons) == 0 || limit <= 0 {
+		return nil
+	}
+	out := make([]failureCount, 0, len(reasons))
+	for reason, count := range reasons {
+		out = append(out, failureCount{Reason: reason, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Reason < out[j].Reason
+		}
+		return out[i].Count > out[j].Count
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func formatFailureBreakdown(reasons []failureCount) string {
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		parts = append(parts, reason.Reason+":"+strconv.FormatInt(reason.Count, 10))
+	}
+	return strings.Join(parts, ",")
 }
 
 func parseFormat(v string) (string, error) {
