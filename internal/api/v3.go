@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -93,11 +92,6 @@ type v3RecordEnvelope struct {
 	record producer.Record
 	key    schemaproducer.Metadata
 	value  schemaproducer.Metadata
-}
-
-type v3RecordSlot struct {
-	env v3RecordEnvelope
-	err error
 }
 
 type countingReader struct {
@@ -312,7 +306,7 @@ func (h *Handler) handleV3RecordStream(w http.ResponseWriter, r *http.Request, t
 			return
 		}
 		if len(results) == 0 {
-			results = []producer.Result{{Err: errors.New("Kafka produce returned no result")}}
+			results = []producer.Result{{Err: errors.New("kafka produce returned no result")}}
 		}
 		if h.metrics != nil {
 			h.metrics.ObserveKafkaCallbackWait(*status, produceWait)
@@ -325,74 +319,6 @@ func (h *Handler) handleV3RecordStream(w http.ResponseWriter, r *http.Request, t
 	if *recordCount == 0 {
 		*status = http.StatusBadRequest
 		writeAPIError(w, *status, errorCodeBadRequest, "request body must include at least one record")
-	}
-}
-
-func (h *Handler) handleV3RecordBody(w http.ResponseWriter, r *http.Request, target v3ProduceTarget, body []byte, status *int, recordCount *int) {
-	slots, err := decodeV3ConcatenatedRecords(r.Context(), target.topic, body, h.schemaEncoder, h.cfg.decodeLimits())
-	if err != nil {
-		*status = http.StatusBadRequest
-		writeAPIError(w, *status, errorCodeBadRequest, err.Error())
-		return
-	}
-	*recordCount = len(slots)
-	if len(slots) == 0 {
-		*status = http.StatusBadRequest
-		writeAPIError(w, *status, errorCodeBadRequest, "request body must include at least one record")
-		return
-	}
-
-	responses := make([]v3ProduceResponse, len(slots))
-	envelopes := make([]v3RecordEnvelope, 0, len(slots))
-	responseIndexes := make([]int, 0, len(slots))
-	decodeFailures := 0
-	for i, slot := range slots {
-		if slot.err != nil {
-			decodeFailures++
-			responses[i] = v3ProduceResponse{
-				ErrorCode: errorCodeBadRequest,
-				Message:   slot.err.Error(),
-				Timestamp: nil,
-			}
-			continue
-		}
-		envelopes = append(envelopes, slot.env)
-		responseIndexes = append(responseIndexes, i)
-	}
-
-	if len(envelopes) > 0 {
-		producerRecords := make([]producer.Record, len(envelopes))
-		for i := range envelopes {
-			producerRecords[i] = envelopes[i].record
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), h.cfg.ProduceTimeout)
-		defer cancel()
-		results, err := h.producer.Produce(ctx, producerRecords)
-		if err != nil {
-			var code int
-			var msg string
-			*status, code, msg = classifyProduceError(err)
-			writeAPIError(w, *status, code, msg)
-			return
-		}
-		for i, result := range results {
-			responses[responseIndexes[i]] = v3ResponseForResult(target, envelopes[i], result)
-		}
-		if h.metrics != nil {
-			successes, failures := countResultStatus(results)
-			h.metrics.ObserveProduceResult(successes, failures+decodeFailures)
-		}
-	} else if h.metrics != nil {
-		h.metrics.ObserveProduceResult(0, decodeFailures)
-	}
-
-	w.Header().Set("Content-Type", mediaJSON)
-	w.WriteHeader(http.StatusOK)
-	for i, resp := range responses {
-		if i > 0 {
-			_, _ = w.Write([]byte("\n"))
-		}
-		_ = json.NewEncoder(w).Encode(resp)
 	}
 }
 
@@ -467,31 +393,6 @@ func (h *Handler) handleV3BatchBody(w http.ResponseWriter, r *http.Request, targ
 	w.Header().Set("Content-Type", mediaJSON)
 	w.WriteHeader(*status)
 	_ = json.NewEncoder(w).Encode(response)
-}
-
-func decodeV3ConcatenatedRecords(ctx context.Context, topic string, body []byte, enc *schemaproducer.Encoder, limits decodeLimits) ([]v3RecordSlot, error) {
-	limits = limits.withDefaults()
-	dec := json.NewDecoder(bytes.NewReader(body))
-	var records []v3RecordSlot
-	for {
-		var rec v3ProduceRecord
-		if err := dec.Decode(&rec); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, err
-		}
-		env, err := v3EnvelopeFromRecord(ctx, topic, "", rec, enc, limits)
-		if err != nil {
-			records = append(records, v3RecordSlot{err: err})
-		} else {
-			records = append(records, v3RecordSlot{env: env})
-		}
-		if len(records) > limits.MaxRecords {
-			return nil, fmt.Errorf("too many records: got %d, limit %d", len(records), limits.MaxRecords)
-		}
-	}
-	return records, nil
 }
 
 func (h *Handler) v3EnvelopeFromRecord(ctx context.Context, topic string, id string, rec v3ProduceRecord) (v3RecordEnvelope, error) {
