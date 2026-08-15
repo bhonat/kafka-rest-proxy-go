@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"testing"
 	"time"
 )
@@ -155,5 +156,40 @@ func TestBuildComparisonsChoosesHighestRecordsPerSecond(t *testing.T) {
 	}
 	if rows[1].NodeWinner != "confluent" || rows[1].FewestNodesText != "5" {
 		t.Fatalf("rows[1] node winner = %q/%q, want confluent/5", rows[1].NodeWinner, rows[1].FewestNodesText)
+	}
+}
+
+func TestNewBenchHTTPClientTunesTransportForConcurrency(t *testing.T) {
+	client, closeClient := newBenchHTTPClient(16, 5*time.Second)
+	defer closeClient()
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type = %T, want *http.Transport", client.Transport)
+	}
+	if client.Timeout != 5*time.Second {
+		t.Fatalf("client timeout = %s", client.Timeout)
+	}
+	if transport.MaxIdleConnsPerHost < 64 {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want at least 64", transport.MaxIdleConnsPerHost)
+	}
+	if transport.MaxConnsPerHost < 64 {
+		t.Fatalf("MaxConnsPerHost = %d, want at least 64", transport.MaxConnsPerHost)
+	}
+	if transport.ResponseHeaderTimeout != 5*time.Second {
+		t.Fatalf("ResponseHeaderTimeout = %s", transport.ResponseHeaderTimeout)
+	}
+}
+
+func TestNewBenchHTTPClientAppliesMinimumConnectionBudget(t *testing.T) {
+	client, closeClient := newBenchHTTPClient(1, time.Second)
+	defer closeClient()
+
+	transport := client.Transport.(*http.Transport)
+	if transport.MaxIdleConnsPerHost != 32 {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want 32", transport.MaxIdleConnsPerHost)
+	}
+	if transport.MaxConnsPerHost != 32 {
+		t.Fatalf("MaxConnsPerHost = %d, want 32", transport.MaxConnsPerHost)
 	}
 }

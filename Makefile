@@ -1,7 +1,9 @@
 VERSION := $(shell cat VERSION)
 GO_PATCHED_TOOLCHAIN ?= go1.25.12
+STATICCHECK_VERSION ?= v0.6.1
 export GOCACHE ?= /tmp/kafka-rest-proxy-go-gocache
-export GOMODCACHE ?= /tmp/kafka-rest-proxy-go-gomodcache
+export GOPATH ?= /tmp/kafka-rest-proxy-go-gopath
+export GOMODCACHE ?= $(GOPATH)/pkg/mod
 
 .PHONY: test fmt-check vet coverage govulncheck staticcheck quality openapi-check licenses-check generate-licenses prepare-security-secrets test-race test-integration test-failure-integration test-cluster-integration test-differential test-differential-full test-schema-registry-integration test-security-integration test-sasl-ssl-integration test-mtls-integration test-acl-integration test-load-integration test-hardening test-soak build build-release generate-sbom sign-release run tidy docker-build compose-up compose-up-cluster compose-up-comparison compose-up-schema-registry compose-up-security compose-up-sasl-ssl compose-up-mtls compose-up-acl compose-down compose-down-cluster compose-down-security compose-smoke bench-produce bench-html bench-suite bench-compare bench-pages bench-regression capture-confluent-fixtures prepare-benchmark-pages otel-metrics
 
@@ -21,7 +23,8 @@ govulncheck:
 	GOTOOLCHAIN=$(GO_PATCHED_TOOLCHAIN)+auto go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 staticcheck:
-	go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+	GOTOOLCHAIN=$(GO_PATCHED_TOOLCHAIN)+auto go mod download
+	GOTOOLCHAIN=$(GO_PATCHED_TOOLCHAIN)+auto go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
 quality: fmt-check vet coverage
 

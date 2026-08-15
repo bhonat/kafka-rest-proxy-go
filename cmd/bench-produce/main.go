@@ -330,6 +330,8 @@ func runScenario(opts benchOptions, target targetSpec, scenario scenarioSpec) be
 	if err != nil {
 		return failedResult(opts, target, scenario, err)
 	}
+	client, closeClient := newBenchHTTPClient(scenario.Clients, opts.Timeout)
+	defer closeClient()
 
 	results := make(chan result, scenario.Clients*4)
 	var started atomic.Int64
@@ -347,7 +349,6 @@ func runScenario(opts benchOptions, target targetSpec, scenario scenarioSpec) be
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			client := &http.Client{Timeout: opts.Timeout}
 			for {
 				if opts.Requests > 0 && started.Add(1) > opts.Requests {
 					return
@@ -420,6 +421,19 @@ func buildBody(records, payloadBytes int, keyPrefix, format string) ([]byte, err
 		}
 	}
 	return json.Marshal(req)
+}
+
+func newBenchHTTPClient(clients int, timeout time.Duration) (*http.Client, func()) {
+	maxConns := clients * 4
+	if maxConns < 32 {
+		maxConns = 32
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = maxConns
+	transport.MaxIdleConnsPerHost = maxConns
+	transport.MaxConnsPerHost = maxConns
+	transport.ResponseHeaderTimeout = timeout
+	return &http.Client{Timeout: timeout, Transport: transport}, transport.CloseIdleConnections
 }
 
 func postOnce(client *http.Client, baseURL, topic string, body []byte, records int64, timeout time.Duration, format string) result {
