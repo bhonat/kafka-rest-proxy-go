@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -191,5 +192,42 @@ func TestNewBenchHTTPClientAppliesMinimumConnectionBudget(t *testing.T) {
 	}
 	if transport.MaxConnsPerHost != 32 {
 		t.Fatalf("MaxConnsPerHost = %d, want 32", transport.MaxConnsPerHost)
+	}
+}
+
+func TestBuildTLDRExplainsNarrowLargeBinaryBatch(t *testing.T) {
+	results := []benchResult{
+		{Scenario: "format=binary payload=128B records/request=100 clients=16 compression=runtime acks=runtime", TargetName: "go", RecordsPerSecond: 442705.35, CapacityNodes: 3, Format: "binary", PayloadBytes: 128, RecordsPerRequest: 100},
+		{Scenario: "format=binary payload=128B records/request=100 clients=16 compression=runtime acks=runtime", TargetName: "confluent", RecordsPerSecond: 170420.58, CapacityNodes: 8, Format: "binary", PayloadBytes: 128, RecordsPerRequest: 100},
+		{Scenario: "format=binary payload=512B records/request=100 clients=16 compression=runtime acks=runtime", TargetName: "go", RecordsPerSecond: 215160.15, CapacityNodes: 7, Format: "binary", PayloadBytes: 512, RecordsPerRequest: 100},
+		{Scenario: "format=binary payload=512B records/request=100 clients=16 compression=runtime acks=runtime", TargetName: "confluent", RecordsPerSecond: 151686.93, CapacityNodes: 9, Format: "binary", PayloadBytes: 512, RecordsPerRequest: 100},
+		{Scenario: "format=binary payload=1KiB records/request=100 clients=16 compression=runtime acks=runtime", TargetName: "go", RecordsPerSecond: 132252.45, CapacityNodes: 10, Format: "binary", PayloadBytes: 1024, RecordsPerRequest: 100},
+		{Scenario: "format=binary payload=1KiB records/request=100 clients=16 compression=runtime acks=runtime", TargetName: "confluent", RecordsPerSecond: 123067.00, CapacityNodes: 11, Format: "binary", PayloadBytes: 1024, RecordsPerRequest: 100},
+	}
+	tldr := buildTLDR(results, buildComparisons(results), capacityReport{Enabled: true})
+	if !tldr.Enabled {
+		t.Fatal("TLDR disabled")
+	}
+	if !strings.Contains(tldr.Lead, "go won 3/3 scenarios") {
+		t.Fatalf("lead = %q, want go winner summary", tldr.Lead)
+	}
+	joined := strings.Join(tldr.Bullets, "\n")
+	for _, want := range []string{
+		"Closest throughput gap: go was 1.07x over confluent",
+		"Large binary batches can naturally narrow the gap",
+		"JSON envelope with base64 keys/values",
+		"Node estimates are rough",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("TLDR bullets missing %q in:\n%s", want, joined)
+		}
+	}
+}
+
+func TestBuildTLDRSingleTargetUsesBaselineLanguage(t *testing.T) {
+	results := []benchResult{{Scenario: "s1", TargetName: "go", RecordsPerSecond: 10, Format: "json"}}
+	tldr := buildTLDR(results, buildComparisons(results), capacityReport{})
+	if !strings.Contains(tldr.Lead, "Single-target run") {
+		t.Fatalf("lead = %q, want single-target language", tldr.Lead)
 	}
 }

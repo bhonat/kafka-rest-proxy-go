@@ -129,6 +129,13 @@ type benchReport struct {
 	Results     []benchResult
 	Comparisons []comparisonRow
 	Capacity    capacityReport
+	TLDR        tldrReport
+}
+
+type tldrReport struct {
+	Enabled bool
+	Lead    string
+	Bullets []string
 }
 
 type capacityReport struct {
@@ -201,6 +208,7 @@ func main() {
 	}
 
 	report.Comparisons = buildComparisons(report.Results)
+	report.TLDR = buildTLDR(report.Results, report.Comparisons, report.Capacity)
 
 	if opts.HTMLPath != "" {
 		if err := writeHTMLReport(opts.HTMLPath, report); err != nil {
@@ -793,6 +801,154 @@ func formatBytes(n int) string {
 	}
 }
 
+func buildTLDR(results []benchResult, comparisons []comparisonRow, capacity capacityReport) tldrReport {
+	if len(results) == 0 {
+		return tldrReport{}
+	}
+
+	bullets := make([]string, 0, 4)
+	lead := "Single-target run; use this report as a baseline for that target and scenario."
+	if len(comparisons) > 0 && uniqueTargetCount(results) > 1 {
+		winnerCounts := make(map[string]int)
+		nodeWinnerCounts := make(map[string]int)
+		for _, row := range comparisons {
+			if row.Winner != "" {
+				winnerCounts[row.Winner]++
+			}
+			if row.NodeWinner != "" {
+				nodeWinnerCounts[row.NodeWinner]++
+			}
+		}
+		lead = "Throughput: " + winnerSummary(winnerCounts, len(comparisons))
+		if capacity.Enabled && len(nodeWinnerCounts) > 0 {
+			bullets = append(bullets, "Estimated nodes: "+winnerSummary(nodeWinnerCounts, len(comparisons)))
+		}
+	}
+
+	closest := closestComparison(comparisons)
+	if closest.winner != "" {
+		bullets = append(bullets, fmt.Sprintf("Closest throughput gap: %s was %.2fx over %s for %s; treat small margins as topology-sensitive until confirmed with longer, broker-isolated runs.", closest.winner, closest.ratio, closest.runnerUp, closest.scenario))
+	}
+
+	if hasNarrowLargeBinaryBatch(comparisons) {
+		bullets = append(bullets, "Large binary batches can naturally narrow the gap: at 1KiB+ payloads and 100 records/request, REST overhead is amortized and Kafka broker/network byte throughput becomes the ceiling.")
+	} else if hasLargeBinaryBatch(results) {
+		bullets = append(bullets, "Large binary batch rows are more likely to measure Kafka broker/network byte throughput than REST proxy overhead.")
+	}
+
+	if hasFormat(results, "binary") {
+		bullets = append(bullets, "Binary format here means Confluent REST binary media type: JSON envelope with base64 keys/values, not raw Kafka protocol bytes.")
+	}
+	if capacity.Enabled {
+		bullets = append(bullets, "Node estimates are rough capacity planning numbers based on measured records/sec plus configured headroom; validate with longer production-like runs before sizing clusters.")
+	}
+
+	return tldrReport{Enabled: true, Lead: lead, Bullets: bullets}
+}
+
+type closestGap struct {
+	winner   string
+	runnerUp string
+	scenario string
+	ratio    float64
+}
+
+func closestComparison(comparisons []comparisonRow) closestGap {
+	var closest closestGap
+	for _, row := range comparisons {
+		var best, second benchResult
+		for _, res := range row.Results {
+			if res.RecordsPerSecond <= 0 {
+				continue
+			}
+			if best.TargetName == "" || res.RecordsPerSecond > best.RecordsPerSecond {
+				second = best
+				best = res
+				continue
+			}
+			if second.TargetName == "" || res.RecordsPerSecond > second.RecordsPerSecond {
+				second = res
+			}
+		}
+		if best.TargetName == "" || second.TargetName == "" || second.RecordsPerSecond <= 0 {
+			continue
+		}
+		ratio := best.RecordsPerSecond / second.RecordsPerSecond
+		if closest.winner == "" || ratio < closest.ratio {
+			closest = closestGap{winner: best.TargetName, runnerUp: second.TargetName, scenario: row.Scenario, ratio: ratio}
+		}
+	}
+	return closest
+}
+
+func uniqueTargetCount(results []benchResult) int {
+	seen := make(map[string]struct{})
+	for _, res := range results {
+		if res.TargetName != "" {
+			seen[res.TargetName] = struct{}{}
+		}
+	}
+	return len(seen)
+}
+
+func hasNarrowLargeBinaryBatch(comparisons []comparisonRow) bool {
+	for _, row := range comparisons {
+		gap := closestComparison([]comparisonRow{row})
+		if gap.winner == "" || gap.ratio > 1.15 {
+			continue
+		}
+		for _, res := range row.Results {
+			if res.Format == "binary" && res.PayloadBytes >= 1024 && res.RecordsPerRequest >= 100 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasLargeBinaryBatch(results []benchResult) bool {
+	for _, res := range results {
+		if res.Format == "binary" && res.PayloadBytes >= 1024 && res.RecordsPerRequest >= 100 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFormat(results []benchResult, format string) bool {
+	for _, res := range results {
+		if res.Format == format {
+			return true
+		}
+	}
+	return false
+}
+
+func winnerSummary(counts map[string]int, total int) string {
+	if total <= 0 || len(counts) == 0 {
+		return "no winner could be determined."
+	}
+	type item struct {
+		name  string
+		count int
+	}
+	items := make([]item, 0, len(counts))
+	for name, count := range counts {
+		items = append(items, item{name: name, count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count == items[j].count {
+			return items[i].name < items[j].name
+		}
+		return items[i].count > items[j].count
+	})
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, fmt.Sprintf("%s won %d/%d scenarios", item.name, item.count, total))
+	}
+	return strings.Join(parts, "; ") + "."
+}
+
 func buildComparisons(results []benchResult) []comparisonRow {
 	grouped := make(map[string][]benchResult)
 	for _, res := range results {
@@ -899,6 +1055,17 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
       padding: 16px;
       background: var(--card);
     }
+    .tldr {
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+      border-radius: 14px;
+      padding: 16px 18px;
+      margin: 24px 0;
+      background: color-mix(in srgb, var(--accent) 9%, Canvas);
+    }
+    .tldr h2 { margin-top: 0; }
+    .tldr p { margin: 0 0 10px; }
+    .tldr ul { margin: 0; padding-left: 20px; }
+    .tldr li + li { margin-top: 6px; }
     .label {
       color: var(--muted);
       font-size: .85rem;
@@ -954,6 +1121,18 @@ var htmlReportTemplate = template.Must(template.New("html-report").Parse(`<!doct
     <strong>{{ .Capacity.HeadroomText }}</strong> headroom
     (effective target {{ .Capacity.EffectiveText }} records/sec). {{ .Capacity.Description }}
   </p>
+  {{ end }}
+
+  {{ if .TLDR.Enabled }}
+  <section class="tldr" aria-label="Benchmark TLDR">
+    <h2>TL;DR</h2>
+    <p>{{ .TLDR.Lead }}</p>
+    {{ if .TLDR.Bullets }}
+    <ul>
+      {{ range .TLDR.Bullets }}<li>{{ . }}</li>{{ end }}
+    </ul>
+    {{ end }}
+  </section>
   {{ end }}
 
   {{ with index .Results 0 }}
