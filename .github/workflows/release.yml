@@ -16,8 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25.12"
           cache: true
@@ -62,7 +62,7 @@ jobs:
         env:
           IMAGE_REF: ${{ steps.release.outputs.image }}
         run: make sign-release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-artifacts
           path: dist/release/

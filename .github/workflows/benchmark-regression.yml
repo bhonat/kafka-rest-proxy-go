@@ -22,8 +22,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.25.12"
           cache: true
@@ -37,7 +37,7 @@ jobs:
         run: make test-soak
       - name: Prepare sanitized benchmark page
         run: make prepare-benchmark-pages
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: benchmark-regression
@@ -47,16 +47,16 @@ jobs:
             coverage.out
       - name: Configure GitHub Pages
         if: success() && github.ref == 'refs/heads/main'
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: Upload GitHub Pages artifact
         if: success() && github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: public
       - name: Deploy benchmark dashboard
         if: success() && github.ref == 'refs/heads/main'
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
       - name: Dump logs on failure
         if: failure()
         run: docker compose logs --no-color
